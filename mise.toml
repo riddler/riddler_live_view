@@ -1,0 +1,13 @@
+# mise config for riddler_live_view: toolchain only.
+#
+#   mise install        provision the toolchain below
+#
+# Pinned to the toolchain the rest of the work on this machine runs. It
+# satisfies mix.exs's `elixir: "~> 1.18"`.
+#
+# Toolchain only: nothing in lib/ or test/ needs a database, a browser or a
+# JRE, so there is no env block and no service to provision here.
+
+[tools]
+erlang = "27.3"
+elixir = "1.18.3-otp-27"
