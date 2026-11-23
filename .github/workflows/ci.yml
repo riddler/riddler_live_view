@@ -82,9 +82,9 @@ jobs:
       # errors, runs credo --strict, dialyzer, the deps audit, the docs and
       # README stages and the full suite with coverage, printing detail under
       # any failing stage - so a red run is diagnosable from this log alone.
-      # Three stages report as skipped and always will: doctor, gettext and
-      # sobelow, none installed here (they are the manifest's
-      # not_applicable_skips).
+      # Four stages report as skipped: doctor, gettext and sobelow, none
+      # installed here (they are the manifest's not_applicable_skips), and
+      # diataxis, which is opt-in and not enabled in .quality.exs.
       #
       # Same reasoning as the toolchain step, applied to the gate itself: the
       # command is read out of .claude/wurk.json rather than written here, so
