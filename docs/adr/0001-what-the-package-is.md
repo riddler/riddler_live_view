@@ -8,14 +8,15 @@ on mount, on every submit and on every back, with one refusal for a Journey
 that does not exist and a Journey that is not the asker's; that the package
 hands a host function components, one per node kind, and one LiveComponent,
 `RiddlerLiveView.Journey`; that accessibility is held by a deterministic
-rule suite in the ExUnit gate, seeded from axe-core; that the markup is
+rule suite in the ExUnit gate; that the markup is
 plain semantic HTML; that an unknown node kind follows riddler's fallback,
 with a component map for a host's own kinds; and that progress is drawn
 only where the host supplies it, with skip left an authored button - each
-was ruled by the operator, 2026-11-23. That the runtime dependencies are
-`riddler` and `phoenix_live_view` only, never a statifier package, was
-ruled by the operator, 2026-11-23, with the package's name and module
-namespace.
+was ruled by the operator, 2026-11-23, and so were the package's name and
+module namespace. The runtime dependencies are `riddler` and
+`phoenix_live_view` only, never a statifier package, because a host wires
+its execution engine to this package and not the reverse (`CLAUDE.md` at
+`6c2f36b`, "What this project is").
 
 This record is written before any component it describes. The code half is
 separate requests, and nothing below is citable from `lib/` until they
@@ -69,9 +70,9 @@ record decides what the package is before any component lands.
 collects what the visitor submits and hands it to the host. It does not
 start an execution, choose the next screen, store a response, keep a
 Journey between visits, or decide who may see a Journey: those are the
-host's, through the behaviours riddler states. What the LiveComponent holds
-in its assigns is the answer it is showing and the scope it checks against,
-for as long as it is mounted, and nothing it holds outlives it.
+host's, through the behaviours riddler states. The LiveComponent holds no
+response and no step beyond the answer it is showing, and nothing it holds
+outlives its mount.
 
 No secret value appears in the HTML a component renders, in the assigns
 after a submit, or in a log line (`CLAUDE.md` at `6c2f36b`,
@@ -142,7 +143,7 @@ the host's.
 ### 6. A deterministic accessibility rule suite runs in the gate
 
 Accessibility is held by a rule suite of ExUnit tests over the HTML the
-components render, its first rules seeded from axe-core's. It is
+components render. It is
 deterministic - the same markup always passes or fails the same rules - and
 it runs in the ExUnit suite, so `mix quality` fails when a component breaks
 a rule. The suite, not this record, enumerates the rules and the components
@@ -217,3 +218,4 @@ would show for a link to no Journey at all.
 - How progress is drawn.
 - The anonymous visitor, streaming and the transport, which rd-ADR-0005's
   Amendment of 2026-11-23 leaves open, and a repeating section.
+- An axe-core browser run.
