@@ -1,0 +1,54 @@
+# Quality configuration for riddler_live_view.
+#
+#   mix quality                 - full gate: format, compile, credo, dialyzer,
+#                                 deps audit, full test suite with coverage.
+#                                 Run before every commit.
+#
+#   mix quality --profile loop  - inner loop while implementing: skips dialyzer
+#                                 and coverage, runs only the tests covering
+#                                 changed code. Use between edits.
+#
+# Agents: prefer `--format json --report -` when you want to route on results.
+#
+# Deliberately small, as riddler's is: adopting a custom stage is a decision to
+# record when there is something for it to protect, not a default to inherit.
+#
+# There is deliberately no .credo.exs either: credo's own defaults under
+# --strict are the gate until this package has a reason to deviate from one.
+#
+[
+  format: [
+    check: true
+  ],
+  compile: [
+    warnings_as_errors: true
+  ],
+  credo: [
+    strict: true
+  ],
+  # The two docs stages make `mix quality` the pre-publish check for this
+  # package's HexDocs and hex.pm pages. The Docs stage fails on any ExDoc
+  # warning. The doc_links stage fails on the link rules ExDoc accepts
+  # silently: a README relative link not in the package files, a relative
+  # link in a Markdown extra to a file that is not itself an extra (moduledoc
+  # links are the Docs stage's), two extras sharing a basename, and a silent
+  # rewrite to a different extra.
+  # `:auto` runs both wherever ex_doc is installed.
+  docs: [
+    enabled: :auto
+  ],
+  doc_links: [
+    enabled: :auto
+  ],
+  # The README stage checks the README keeps the shape of an introduction
+  # and a map: what, why, install, one basic-usage snippet, and the links
+  # grouped by the reader's question. Findings fail the gate; the stage is
+  # never lowered to a warning to get a run green.
+  readme: [enabled: :auto, severity: :error],
+  profiles: [
+    loop: [
+      stages: [:format, :compile, :credo, :test],
+      test: [scope: :changed, coverage: false]
+    ]
+  ]
+]
