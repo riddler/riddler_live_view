@@ -59,8 +59,9 @@ defmodule RiddlerLiveView.Journey do
       `"retry_after_ms"`, the component sets a LiveView timer,
       `Phoenix.LiveView.send_update_after/4` to itself on a connected
       socket, and asks the host again when it fires; a new answer cancels a
-      timer still pending; a `"retry_after_ms"` above 4294967295, the
-      longest timer the runtime sets, waits that long;
+      timer still pending; the component waits at most 4294967295
+      milliseconds, about 49.7 days, its own ceiling, so a longer
+      `"retry_after_ms"` waits that long;
     * done as a paragraph; the answer's `"result"` is the host's and is not
       drawn.
 
@@ -227,9 +228,9 @@ defmodule RiddlerLiveView.Journey do
   # present/1 and the access check, as on mount.
   @presenting [:journey, :host, :access, :actor]
 
-  # The longest timer the runtime sets; a longer retry_after_ms waits this
-  # long instead of raising.
-  @longest_timer_ms 4_294_967_295
+  # The component's own ceiling on a retry timer, about 49.7 days: a longer
+  # retry_after_ms waits this long.
+  @retry_ceiling_ms 4_294_967_295
 
   @impl true
   @spec mount(Socket.t()) :: {:ok, Socket.t()}
@@ -552,7 +553,7 @@ defmodule RiddlerLiveView.Journey do
               self(),
               __MODULE__,
               %{id: socket.assigns.id, refresh: true},
-              min(ms, @longest_timer_ms)
+              min(ms, @retry_ceiling_ms)
             )
 
       _answer ->
