@@ -89,7 +89,10 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"text question with another question's finding",
        text_question(%{}, [finding("response.required", "card_pin")])},
       {"frame around questions with their findings and the screen's own", refused(true)},
-      {"frame around questions with their findings only", refused(false)}
+      {"frame around questions with their findings only", refused(false)},
+      {"elements of the kinds the package draws", drawn_elements([])},
+      {"elements with a kind nothing draws", drawn_elements([%{"type" => "rating_question"}])},
+      {"elements with a host's own kind", hosted_elements()}
     ]
   end
 
@@ -108,7 +111,8 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"every button has text", &button_has_text/1},
       {"every button says its type", &button_typed/1},
       {"aria-invalid only on a form control that names a finding", &invalid_names_finding/1},
-      {"focus moves only to a finding in the markup that can take it", &focus_reaches_finding/1}
+      {"focus moves only to a finding in the markup that can take it", &focus_reaches_finding/1},
+      {"a disabled button names text that says why", &disabled_button_says_why/1}
     ]
   end
 
@@ -126,7 +130,8 @@ defmodule RiddlerLiveView.AccessibilityTest do
     "every button has text",
     "every button says its type",
     "aria-invalid only on a form control that names a finding",
-    "focus moves only to a finding in the markup that can take it"
+    "focus moves only to a finding in the markup that can take it",
+    "a disabled button names text that says why"
   ]
 
   for name <- @rule_names do
@@ -156,7 +161,8 @@ defmodule RiddlerLiveView.AccessibilityTest do
         ~s(<section class="" data-riddler-screen="s">x</section>),
         ~s(<legend data-riddler-legend>x</legend>),
         ~s(<option data-riddler-option="a"></option>),
-        ~s(<button type="button" data-riddler-back>Back</button>)
+        ~s(<button type="button" data-riddler-back>Back</button>),
+        ~s(<p id="n" data-riddler-unknown="x">Cannot be sent.</p>)
       ],
       "no empty heading" => [~s(<h2 class="a"> </h2>), ~s(<h1></h1>)],
       "aria-labelledby names an id in the markup" => [
@@ -216,6 +222,12 @@ defmodule RiddlerLiveView.AccessibilityTest do
         ~s(<span class="a" hidden phx-mounted="[[&quot;focus&quot;,{&quot;to&quot;:&quot;#f&quot;}]]"></span>),
         ~s(<p id="f" class="f" data-riddler-finding="x">F</p><span class="a" phx-mounted="[[&quot;focus&quot;,{&quot;to&quot;:&quot;#f&quot;}]]"></span>),
         ~s(<p id="h" class="h" tabindex="-1">Help</p><span class="a" phx-mounted="[[&quot;focus&quot;,{&quot;to&quot;:&quot;#h&quot;}]]"></span>)
+      ],
+      "a disabled button names text that says why" => [
+        ~s(<button class="a" type="submit" disabled>Continue</button>),
+        ~s(<button class="a" type="submit" disabled aria-describedby="n">Continue</button>),
+        ~s(<p id="n" class="n"> </p><button class="a" type="submit" disabled aria-describedby="n">Go</button>),
+        ~s(<p id="n" class="n">Why.</p><button class="a" type="submit" disabled aria-describedby="">Go</button>)
       ]
     }
 
@@ -234,7 +246,7 @@ defmodule RiddlerLiveView.AccessibilityTest do
 
   # Sabotage: drop the class attribute from the text component's <p>.
   defp component_has_class(html) do
-    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held|legend|option|back|finding|focus)\b[^>]*)>/
+    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held|legend|option|back|finding|focus|unknown)\b[^>]*)>/
     |> Regex.scan(html, capture: :all_but_first)
     |> List.flatten()
     |> Enum.reject(&(&1 =~ ~r/\sclass="[^"\s][^"]*"/))
@@ -434,6 +446,28 @@ defmodule RiddlerLiveView.AccessibilityTest do
 
   defp unreached_focus(command, _findings), do: [inspect(command)]
 
+  # Sabotage: drop aria-describedby from the button component.
+  defp disabled_button_says_why(html) do
+    texts =
+      ~r{<([a-z0-9]+)\b[^>]*\sid="([^"]+)"[^>]*>(.*?)</\1>}s
+      |> Regex.scan(html, capture: :all_but_first)
+      |> Enum.reject(fn [_tag, _id, text] ->
+        text |> String.replace(~r/<[^>]*>/, "") |> String.trim() == ""
+      end)
+      |> Enum.map(fn [_tag, id, _text] -> id end)
+
+    ~r/<button\b([^>]*)>/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.filter(&(&1 =~ ~r/\sdisabled(?:[\s=>]|$)/))
+    |> Enum.reject(fn attrs ->
+      case Regex.run(~r/\saria-describedby="([^"]+)"/, attrs) do
+        [_, ids] -> Enum.any?(String.split(ids), &(&1 in texts))
+        nil -> false
+      end
+    end)
+  end
+
   defp finding(code, element_key, author_message \\ nil) do
     %{
       "code" => code,
@@ -483,6 +517,73 @@ defmodule RiddlerLiveView.AccessibilityTest do
       <Components.boolean_question element={@rules} findings={@findings} />
     </Components.frame>
     """)
+  end
+
+  defp drawn_elements(extra) do
+    assigns = %{
+      screen: %{
+        "key" => "details",
+        "elements" =>
+          [
+            %{"type" => "heading", "key" => "details_heading", "level" => 1, "text" => "Details"},
+            %{"type" => "text", "key" => "address_note", "text" => "Your address."},
+            %{"type" => "text_question", "key" => "reminder_email", "label" => "Email"},
+            %{"type" => "secret_question", "key" => "card_pin", "label" => "PIN", "held" => true},
+            %{
+              "type" => "choice_question",
+              "key" => "card_type",
+              "label" => "Card",
+              "select" => "one",
+              "answer_options" => [%{"value" => "adult", "label" => "Adult card"}]
+            },
+            %{"type" => "boolean_question", "key" => "agrees_to_rules", "label" => "I agree."},
+            %{
+              "type" => "button",
+              "key" => "details_continue",
+              "label" => "Continue",
+              "outcome" => "details_submitted"
+            }
+          ] ++ extra
+      },
+      moves: %{"outcomes" => ["details_submitted"], "back" => true}
+    }
+
+    rendered_to_string(~H"""
+    <Components.frame screen={@screen}>
+      <Components.elements screen={@screen} moves={@moves} />
+    </Components.frame>
+    """)
+  end
+
+  defp hosted_elements do
+    assigns = %{
+      screen: %{
+        "key" => "details",
+        "elements" => [
+          %{"type" => "branch_map", "key" => "pickup_branch"},
+          %{
+            "type" => "button",
+            "key" => "details_continue",
+            "label" => "Continue",
+            "outcome" => "details_submitted"
+          }
+        ]
+      },
+      moves: %{"outcomes" => ["details_submitted"], "back" => true},
+      components: %{"branch_map" => &branch_map/1}
+    }
+
+    rendered_to_string(~H"""
+    <Components.frame screen={@screen}>
+      <Components.elements screen={@screen} moves={@moves} components={@components} />
+    </Components.frame>
+    """)
+  end
+
+  defp branch_map(assigns) do
+    ~H"""
+    <p class="branch-map" data-riddler-element="branch_map">Riverside branch</p>
+    """
   end
 
   defp ids(html) do
