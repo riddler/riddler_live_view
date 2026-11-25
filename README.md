@@ -3,7 +3,7 @@
 RiddlerLiveView renders what [Riddler](https://hex.pm/packages/riddler)
 presents as Phoenix LiveView. Riddler answers what one visitor sees at one
 step of a Journey; this package turns that answer into plain semantic HTML: a
-function component for each node kind and one LiveComponent a host embeds.
+function component for each element kind and one LiveComponent a host embeds.
 
 ## Why RiddlerLiveView
 
@@ -14,8 +14,9 @@ patron-registration screen looking the same wherever it is embedded, and keeps
 the host to what is its own: who may see a Journey, where it runs and what
 happens when a visitor submits.
 
-This version is a scaffold. It carries no components yet, and the package
-stays at 0.0.0 until its first release.
+This version is unreleased. It carries the screen's frame and the components
+for the `heading` and `text` elements, and the package stays at 0.0.0 until
+its first release.
 
 ## Installation
 
@@ -35,16 +36,18 @@ end
 
 ## Basic usage
 
-There is nothing to call yet. Fetching the package and compiling it is the
-whole of what it does at this version:
+Render the screen of a patron registration from the answer Riddler gives for
+one step of a Journey, with the frame around its elements:
 
-```bash
-mix deps.get
-mix compile
+```heex
+<RiddlerLiveView.Components.frame screen={@answer["screen"]} progress={@answer["progress"]}>
+  <RiddlerLiveView.Components.heading element={%{"key" => "details_heading", "level" => 2, "text" => "Your details"}} />
+  <RiddlerLiveView.Components.text element={%{"key" => "reminder_note", "text" => "We send due-date reminders to this address."}} />
+</RiddlerLiveView.Components.frame>
 ```
 
-The first release will render a patron registration screen from the answer
-Riddler gives for one step of a Journey.
+The markup is plain semantic HTML with a `class` and stable `data-riddler-*`
+attributes on every component; the package ships no stylesheet.
 
 ## Documentation
 
@@ -55,7 +58,7 @@ Riddler gives for one step of a Journey.
 ## Compatibility
 
 RiddlerLiveView needs Elixir 1.18 or later (`elixir: "~> 1.18"`). It has two
-runtime dependencies: [riddler](https://hex.pm/packages/riddler) `~> 0.6`,
+runtime dependencies: [riddler](https://hex.pm/packages/riddler) `~> 0.8`,
 which presents each step of a Journey, and
 [phoenix_live_view](https://hex.pm/packages/phoenix_live_view) `~> 1.2`,
 which renders it. Nothing in the statifier family is a dependency: a host
