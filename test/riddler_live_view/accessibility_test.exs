@@ -28,7 +28,20 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"heading level 4", heading(4, "Your library card")},
       {"heading with blank text", heading(2, " ")},
       {"text", text("Bring a proof of address to the branch.")},
-      {"frame around a level 1 heading and a text", composed()}
+      {"frame around a level 1 heading and a text", composed()},
+      {"text question", text_question(%{})},
+      {"text question, required, with help and a value",
+       text_question(%{
+         "required" => true,
+         "help" => "One reminder a week.",
+         "value" => "ada@example.org"
+       })},
+      {"text question, phone format", text_question(%{"format" => "phone", "key" => "phone"})},
+      {"secret question", secret_question(%{})},
+      {"secret question, held", secret_question(%{"held" => true})},
+      {"secret question, required, held, with help",
+       secret_question(%{"held" => true, "required" => true, "help" => "Four digits."})},
+      {"frame around a text question and a secret question", questions()}
     ]
   end
 
@@ -39,7 +52,9 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"no empty heading", &no_empty_heading/1},
       {"aria-labelledby names an id in the markup", &labelledby_resolves/1},
       {"no duplicate id", &ids_unique/1},
-      {"a progress bar has a name, a max and a value within it", &progress_named_and_bounded/1}
+      {"a progress bar has a name, a max and a value within it", &progress_named_and_bounded/1},
+      {"every input has a label naming it", &input_labelled/1},
+      {"aria-describedby names ids in the markup", &describedby_resolves/1}
     ]
   end
 
@@ -49,7 +64,9 @@ defmodule RiddlerLiveView.AccessibilityTest do
     "no empty heading",
     "aria-labelledby names an id in the markup",
     "no duplicate id",
-    "a progress bar has a name, a max and a value within it"
+    "a progress bar has a name, a max and a value within it",
+    "every input has a label naming it",
+    "aria-describedby names ids in the markup"
   ]
 
   for name <- @rule_names do
@@ -89,6 +106,17 @@ defmodule RiddlerLiveView.AccessibilityTest do
         ~s(<progress class="a" value="1" max="3"></progress>),
         ~s(<progress class="a" aria-label="P" value="1"></progress>),
         ~s(<progress class="a" aria-label="P" max="3"></progress>)
+      ],
+      "every input has a label naming it" => [
+        ~s(<input class="a" id="pin" type="password"/>),
+        ~s(<label for="other">PIN</label><input class="a" id="pin"/>),
+        ~s(<label for="pin"> </label><input class="a" id="pin"/>),
+        ~s(<input class="a" type="text"/>)
+      ],
+      "aria-describedby names ids in the markup" => [
+        ~s(<input class="a" aria-describedby="missing"/>),
+        ~s(<p id="h">x</p><input class="a" aria-describedby="h missing"/>),
+        ~s(<input class="a" aria-describedby=""/>)
       ]
     }
 
@@ -107,7 +135,7 @@ defmodule RiddlerLiveView.AccessibilityTest do
 
   # Sabotage: drop the class attribute from the text component's <p>.
   defp component_has_class(html) do
-    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements)\b[^>]*)>/
+    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held)\b[^>]*)>/
     |> Regex.scan(html, capture: :all_but_first)
     |> List.flatten()
     |> Enum.reject(&(&1 =~ ~r/\sclass="[^"\s][^"]*"/))
@@ -118,6 +146,40 @@ defmodule RiddlerLiveView.AccessibilityTest do
     ~r{<h([1-6])\b[^>]*>(.*?)</h\1>}s
     |> Regex.scan(html, capture: :all_but_first)
     |> Enum.filter(fn [_level, text] -> String.trim(text) == "" end)
+  end
+
+  # Sabotage: point the text question's label at an id its input does not carry.
+  defp input_labelled(html) do
+    labels =
+      ~r{<label\b[^>]*\sfor="([^"]+)"[^>]*>(.*?)</label>}s
+      |> Regex.scan(html, capture: :all_but_first)
+      |> Enum.reject(fn [_for, text] -> String.trim(text) == "" end)
+      |> Enum.map(&hd/1)
+
+    ~r/<input\b([^>]*)>/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.reject(fn attrs ->
+      case Regex.run(~r/\sid="([^"]+)"/, attrs) do
+        [_, id] -> id in labels
+        nil -> false
+      end
+    end)
+  end
+
+  # Sabotage: name the secret question's held paragraph by an id it does not carry.
+  defp describedby_resolves(html) do
+    ids = ids(html)
+
+    ~r/aria-describedby="([^"]*)"/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.flat_map(fn value ->
+      case String.split(value) do
+        [] -> [value]
+        names -> Enum.reject(names, &(&1 in ids))
+      end
+    end)
   end
 
   # Sabotage: label the section with a title id the <h1> does not carry.
@@ -195,5 +257,52 @@ defmodule RiddlerLiveView.AccessibilityTest do
   defp text(text) do
     assigns = %{element: %{"key" => "address_note", "text" => text}}
     rendered_to_string(~H"<Components.text element={@element} />")
+  end
+
+  defp text_question(fields) do
+    element =
+      Map.merge(
+        %{
+          "type" => "text_question",
+          "key" => "reminder_email",
+          "label" => "Email",
+          "format" => "email"
+        },
+        fields
+      )
+
+    assigns = %{element: element}
+    rendered_to_string(~H"<Components.text_question element={@element} />")
+  end
+
+  defp secret_question(fields) do
+    element =
+      Map.merge(
+        %{
+          "type" => "secret_question",
+          "key" => "card_pin",
+          "label" => "Card PIN",
+          "held" => false
+        },
+        fields
+      )
+
+    assigns = %{element: element}
+    rendered_to_string(~H"<Components.secret_question element={@element} />")
+  end
+
+  defp questions do
+    assigns = %{
+      screen: @screen,
+      email: %{"key" => "reminder_email", "label" => "Email", "help" => "Weekly."},
+      pin: %{"key" => "card_pin", "label" => "Card PIN", "held" => true, "help" => "Four digits."}
+    }
+
+    rendered_to_string(~H"""
+    <Components.frame screen={@screen}>
+      <Components.text_question element={@email} />
+      <Components.secret_question element={@pin} />
+    </Components.frame>
+    """)
   end
 end

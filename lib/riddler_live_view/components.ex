@@ -11,7 +11,7 @@ defmodule RiddlerLiveView.Components do
     * `frame/1` draws the screen around its elements: the title, and
       progress when the answer carries it.
     * One component per element kind, named for the kind it renders:
-      `heading/1` and `text/1`.
+      `heading/1`, `text/1`, `text_question/1` and `secret_question/1`.
 
   The markup ships no stylesheet and no CSS framework class. Every component
   carries a `class` attribute, and a host may add its own classes through
@@ -21,14 +21,20 @@ defmodule RiddlerLiveView.Components do
 
     * `data-riddler-element` on the markup of each element, whose value is
       the element's kind, the `"type"` the answer gives it (`"heading"`,
-      `"text"`);
+      `"text"`, `"text_question"`, `"secret_question"`);
     * `data-riddler-key` on the markup of each element, whose value is the
       element's `"key"`;
     * `data-riddler-screen` on the frame, whose value is the screen's
       `"key"`;
     * `data-riddler-title`, `data-riddler-progress` and
       `data-riddler-elements` on the frame's title, progress and the
-      container its elements render in.
+      container its elements render in;
+    * `data-riddler-label`, `data-riddler-input`, `data-riddler-help` and
+      `data-riddler-held` on a question's label, its input, its help and
+      the paragraph that says a secret question's value is held.
+
+  A secret question's input never carries a value: no `value` attribute,
+  whatever the element carries, and `autocomplete="off"`.
 
   ## Example
 
@@ -37,6 +43,7 @@ defmodule RiddlerLiveView.Components do
       <RiddlerLiveView.Components.frame screen={@answer["screen"]} progress={@answer["progress"]}>
         <RiddlerLiveView.Components.heading element={heading} />
         <RiddlerLiveView.Components.text element={text} />
+        <RiddlerLiveView.Components.text_question element={email} />
       </RiddlerLiveView.Components.frame>
   """
 
@@ -168,6 +175,158 @@ defmodule RiddlerLiveView.Components do
     </p>
     """
   end
+
+  @doc """
+  Renders a `text_question` element as a labelled text input.
+
+  The question's `"label"` is the input's `<label>`. Its `"help"`, when it
+  has one, is a paragraph the input names as its description. The input
+  carries the question's `"placeholder"`, and `required` where the question
+  is required. The value the answer presents for the question, a response
+  the visitor already gave or its prefill or default, is the input's
+  `value`; a presented value that is not text or a number is not drawn.
+
+  The `"format"` picks the input's `type`: `email` for `"email"`, `tel` for
+  `"phone"`, and `text` for every other format and for none. The input
+  carries no `pattern`, `min` or `max`: riddler validates what the visitor
+  submits against the format, and the browser is not asked to.
+
+  The input's `id` is derived from the question's `"key"`, and its `name`
+  is the key unless the host passes one.
+  """
+  attr(:element, :map,
+    required: true,
+    doc:
+      "A `text_question` element of the answer: its `\"key\"`, `\"label\"` and, where present, `\"help\"`, `\"placeholder\"`, `\"required\"`, `\"format\"` and `\"value\"`."
+  )
+
+  attr(:name, :string, default: nil, doc: "The input's `name`; the element's `\"key\"` when nil.")
+
+  attr(:class, :any, default: nil, doc: "Classes added to the question's own.")
+
+  @spec text_question(map()) :: Phoenix.LiveView.Rendered.t()
+  def text_question(assigns) do
+    key = assigns.element["key"]
+    help = present_text(assigns.element["help"])
+
+    assigns =
+      assign(assigns,
+        input_id: input_id(key),
+        input_name: assigns.name || key,
+        input_type: input_type(assigns.element["format"]),
+        value: present_value(assigns.element["value"]),
+        help: help,
+        described_by: help && help_id(key)
+      )
+
+    ~H"""
+    <div
+      class={["riddler-text-question" | List.wrap(@class)]}
+      data-riddler-element="text_question"
+      data-riddler-key={@element["key"]}
+    >
+      <label for={@input_id} class="riddler-label" data-riddler-label>{@element["label"]}</label>
+      <input
+        type={@input_type}
+        id={@input_id}
+        name={@input_name}
+        value={@value}
+        placeholder={@element["placeholder"]}
+        required={@element["required"] == true}
+        aria-describedby={@described_by}
+        class="riddler-input"
+        data-riddler-input
+      />
+      <p :if={@help} id={@described_by} class="riddler-help" data-riddler-help>{@help}</p>
+    </div>
+    """
+  end
+
+  @doc """
+  Renders a `secret_question` element as a labelled password input that
+  never carries a value.
+
+  The input has no `value` attribute, whatever the element carries, and sets
+  `autocomplete="off"`, so nothing the visitor typed is drawn back into the
+  page or offered again by the browser. riddler presents no value for a
+  secret question, only `"held"`; where `"held"` is `true` a paragraph says
+  a value is held, and the input names it as part of its description.
+
+  The input carries `required` where the question is required and no value
+  is held: a held value already satisfies `required` in riddler's
+  validation. The question's `"help"`, when it has one, is a paragraph the
+  input names as its description too.
+
+  The input's `id` is derived from the question's `"key"`, and its `name`
+  is the key unless the host passes one.
+  """
+  attr(:element, :map,
+    required: true,
+    doc:
+      "A `secret_question` element of the answer: its `\"key\"`, `\"label\"` and `\"held\"` and, where present, `\"help\"` and `\"required\"`."
+  )
+
+  attr(:name, :string, default: nil, doc: "The input's `name`; the element's `\"key\"` when nil.")
+
+  attr(:held_text, :string,
+    default: "A value is held.",
+    doc: "The text shown where a value is held."
+  )
+
+  attr(:class, :any, default: nil, doc: "Classes added to the question's own.")
+
+  @spec secret_question(map()) :: Phoenix.LiveView.Rendered.t()
+  def secret_question(assigns) do
+    key = assigns.element["key"]
+    held = assigns.element["held"] == true
+    help = present_text(assigns.element["help"])
+    described = [held && held_id(key), help && help_id(key)] |> Enum.filter(& &1)
+
+    assigns =
+      assign(assigns,
+        input_id: input_id(key),
+        input_name: assigns.name || key,
+        held: held,
+        held_id: held_id(key),
+        help: help,
+        help_id: help_id(key),
+        required: assigns.element["required"] == true and not held,
+        described_by: if(described == [], do: nil, else: Enum.join(described, " "))
+      )
+
+    ~H"""
+    <div
+      class={["riddler-secret-question" | List.wrap(@class)]}
+      data-riddler-element="secret_question"
+      data-riddler-key={@element["key"]}
+    >
+      <label for={@input_id} class="riddler-label" data-riddler-label>{@element["label"]}</label>
+      <input
+        type="password"
+        id={@input_id}
+        name={@input_name}
+        autocomplete="off"
+        required={@required}
+        aria-describedby={@described_by}
+        class="riddler-input"
+        data-riddler-input
+      />
+      <p :if={@held} id={@held_id} class="riddler-held" data-riddler-held>{@held_text}</p>
+      <p :if={@help} id={@help_id} class="riddler-help" data-riddler-help>{@help}</p>
+    </div>
+    """
+  end
+
+  defp input_id(key), do: "riddler-element-#{key}"
+  defp help_id(key), do: "riddler-element-#{key}-help"
+  defp held_id(key), do: "riddler-element-#{key}-held"
+
+  defp input_type("email"), do: "email"
+  defp input_type("phone"), do: "tel"
+  defp input_type(_format), do: "text"
+
+  defp present_value(value) when is_binary(value) or is_number(value), do: value
+  defp present_value(_value), do: nil
 
   defp heading_tag(level) when is_integer(level) and level in 1..6, do: "h#{level}"
 
