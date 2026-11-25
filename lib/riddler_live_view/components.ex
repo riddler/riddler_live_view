@@ -179,8 +179,14 @@ defmodule RiddlerLiveView.Components do
 
   Given `findings`, the frame draws, between its progress and its elements,
   each finding that names no question among the screen's `"elements"`, names
-  them as the section's description, and moves focus to the first finding of the screen when the findings appear;
-  the module's "Findings" section says which finding is first.
+  them as the section's description, and moves focus to the first finding of
+  the screen when the findings appear; the module's "Findings" section says
+  which finding is first.
+
+  The frame reads the questions from the `screen` it is given, so pass the
+  answer's `"screen"` whole. A screen map without `"elements"` names no
+  question, so the frame draws every finding, and a question the host draws
+  inside the frame draws it again.
   """
   attr(:screen, :map,
     required: true,
@@ -361,8 +367,11 @@ defmodule RiddlerLiveView.Components do
 
   The `"format"` picks the input's `type`: `email` for `"email"`, `tel` for
   `"phone"`, and `text` for every other format and for none. The input
-  carries no `pattern`, `min` or `max`: riddler validates what the visitor
-  submits against the format, and the browser is not asked to.
+  carries no `pattern`, `min` or `max`, so the browser is not asked to check
+  the format: riddler does. The browser's own checks for the input's `type`
+  and for `required` still run, and can stop a submit with the browser's own
+  message; a host that wants none of them draws the form itself and adds
+  `novalidate` to it.
 
   Given `findings`, the question draws those whose `element_key` is its
   `"key"` after the input, names them in the input's description ahead of
@@ -993,11 +1002,10 @@ defmodule RiddlerLiveView.Components do
   `findings` and `finding_text` pass to every question.
 
   An element of any other kind is not drawn. Where the screen has one, a
-  notice is drawn above the elements, a paragraph with `role="status"`, so
-  a screen reader announces it when a screen arrives, whose text is
-  `unknown_text`, and every button is drawn disabled and names the notice;
-  `unknown_kinds/2` answers the same kinds for the host's submit. The
-  module's "Elements of a kind the package does not draw" section says why.
+  notice is drawn above the elements, a status region (a paragraph with
+  `role="status"`) whose text is `unknown_text`, and every button is drawn
+  disabled and names the notice; `unknown_kinds/2` answers the same kinds for
+  the host's submit. The module's "Elements of a kind the package does not draw" section says why.
 
   The notice's `id` is derived from `id_prefix` and the screen's `"key"`,
   and `id_prefix` passes to every question.
