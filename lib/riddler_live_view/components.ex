@@ -12,7 +12,9 @@ defmodule RiddlerLiveView.Components do
       progress when the answer carries it.
     * One component per element kind, named for the kind it renders:
       `heading/1`, `text/1`, `text_question/1`, `secret_question/1`,
-      `choice_question/1` and `boolean_question/1`.
+      `choice_question/1`, `boolean_question/1` and `button/1`.
+    * `back/1` draws the Back control where the answer's `"moves"` let the
+      visitor go back.
 
   The markup ships no stylesheet and no CSS framework class. Every component
   carries a `class` attribute, and a host may add its own classes through
@@ -23,7 +25,7 @@ defmodule RiddlerLiveView.Components do
     * `data-riddler-element` on the markup of each element, whose value is
       the element's kind, the `"type"` the answer gives it (`"heading"`,
       `"text"`, `"text_question"`, `"secret_question"`,
-      `"choice_question"`, `"boolean_question"`);
+      `"choice_question"`, `"boolean_question"`, `"button"`);
     * `data-riddler-key` on the markup of each element, whose value is the
       element's `"key"`;
     * `data-riddler-screen` on the frame, whose value is the screen's
@@ -39,7 +41,12 @@ defmodule RiddlerLiveView.Components do
       option's `"value"`;
     * `data-riddler-select` on a choice question, `"one"` or `"many"`, and
       `data-riddler-min-selections` and `data-riddler-max-selections`
-      where it carries those bounds under `"many"`.
+      where it carries those bounds under `"many"`;
+    * `data-riddler-outcome`, `data-riddler-validates` and
+      `data-riddler-style` on a button, whose values are its `"outcome"`,
+      `"true"` or `"false"` for whether it validates, and its `"style"`
+      where it carries one;
+    * `data-riddler-back` on the Back control.
 
   A secret question's input never carries a value: no `value` attribute,
   whatever the element carries, and `autocomplete="off"`.
@@ -52,10 +59,14 @@ defmodule RiddlerLiveView.Components do
         <RiddlerLiveView.Components.heading element={heading} />
         <RiddlerLiveView.Components.text element={text} />
         <RiddlerLiveView.Components.text_question element={email} />
+        <RiddlerLiveView.Components.button element={continue} moves={@answer["moves"]} />
+        <RiddlerLiveView.Components.back screen={@answer["screen"]} moves={@answer["moves"]} />
       </RiddlerLiveView.Components.frame>
   """
 
   use Phoenix.Component
+
+  alias Phoenix.LiveView.JS
 
   @doc """
   Draws a presented screen around its elements.
@@ -526,6 +537,132 @@ defmodule RiddlerLiveView.Components do
       <label for={@input_id} class="riddler-label" data-riddler-label>{@element["label"]}</label>
       <p :if={@help} id={@described_by} class="riddler-help" data-riddler-help>{@help}</p>
     </div>
+    """
+  end
+
+  @doc """
+  Renders a `button` element as a submit button that raises its outcome.
+
+  The button is drawn only where the answer's `"moves"` lists its
+  `"outcome"` among `"outcomes"`: a client reads what it may submit from the
+  moves, never from the elements, so a button whose outcome the moves do not
+  list is not drawn. Drawn, it is a `<button type="submit">` whose text is
+  the button's `"label"` and whose `name` and `value` are `"outcome"` and the
+  button's outcome, so the form it submits carries the outcome under the key
+  riddler's submit names.
+
+  A button whose `"validates"` is `false` does not validate the screen it
+  submits: it carries `formnovalidate`, so the browser's own checks do not
+  stop the press, and `data-riddler-validates="false"`, so the host knows to
+  submit it without validating the responses. Every other button carries
+  `data-riddler-validates="true"`, riddler's default. The submit names the
+  outcome, not the button's key: in a document riddler validates, no two
+  buttons a screen shows together raise one outcome, so the host finds the
+  pressed button, and whether it validates, by its outcome. The button's
+  `"style"`, a string from the open set riddler leaves to a renderer, is
+  carried as `data-riddler-style` and drawn no differently.
+  """
+  attr(:element, :map,
+    required: true,
+    doc:
+      "A `button` element of the answer: its `\"key\"`, `\"label\"` and `\"outcome\"` and, where present, `\"validates\"` and `\"style\"`."
+  )
+
+  attr(:moves, :map,
+    required: true,
+    doc: "The answer's `\"moves\"`: its `\"outcomes\"` and `\"back\"`."
+  )
+
+  attr(:class, :any, default: nil, doc: "Classes added to the button's own.")
+
+  @spec button(map()) :: Phoenix.LiveView.Rendered.t()
+  def button(assigns) do
+    outcome = assigns.element["outcome"]
+    style = assigns.element["style"]
+
+    assigns =
+      assign(assigns,
+        shown: is_binary(outcome) and outcome in List.wrap(assigns.moves["outcomes"]),
+        validates: assigns.element["validates"] != false,
+        style: if(is_binary(style), do: style)
+      )
+
+    ~H"""
+    <button
+      :if={@shown}
+      type="submit"
+      name="outcome"
+      value={@element["outcome"]}
+      formnovalidate={not @validates}
+      class={["riddler-button" | List.wrap(@class)]}
+      data-riddler-element="button"
+      data-riddler-key={@element["key"]}
+      data-riddler-outcome={@element["outcome"]}
+      data-riddler-validates={to_string(@validates)}
+      data-riddler-style={@style}
+    >
+      {@element["label"]}
+    </button>
+    """
+  end
+
+  @doc """
+  Draws the Back control, only where the answer's `"moves"` say `"back"` is
+  `true`.
+
+  Back is not an element of the screen and raises no outcome: it is a
+  `<button type="button">` that submits no form, so nothing the visitor
+  entered on the screen is validated or sent. Pressed, it pushes `event`
+  with riddler's back request as its value, `"screen"`, the key of the
+  screen shown, and `"back"`, `true`, with no `"outcome"`; a host's
+  LiveView, or the component named by `target`, handles the event and
+  passes the request on. LiveView adds the button's own `"value"`, an empty
+  string, to the params, and `Riddler.Journey.decode_submit/1` drops it.
+  """
+  attr(:screen, :map,
+    required: true,
+    doc: "The answer's `\"screen\"`: its `\"key\"` is the back request's `\"screen\"`."
+  )
+
+  attr(:moves, :map,
+    required: true,
+    doc: "The answer's `\"moves\"`: its `\"outcomes\"` and `\"back\"`."
+  )
+
+  attr(:label, :string, default: "Back", doc: "The control's text.")
+
+  attr(:event, :string, default: "back", doc: "The event the control pushes.")
+
+  attr(:target, :any,
+    default: nil,
+    doc:
+      "Where the event is pushed: a LiveComponent's `@myself` or a selector; the LiveView when nil."
+  )
+
+  attr(:class, :any, default: nil, doc: "Classes added to the control's own.")
+
+  @spec back(map()) :: Phoenix.LiveView.Rendered.t()
+  def back(assigns) do
+    push_opts =
+      [value: %{"screen" => assigns.screen["key"], "back" => true}]
+      |> then(&if(assigns.target, do: [{:target, assigns.target} | &1], else: &1))
+
+    assigns =
+      assign(assigns,
+        shown: assigns.moves["back"] == true,
+        push: JS.push(assigns.event, push_opts)
+      )
+
+    ~H"""
+    <button
+      :if={@shown}
+      type="button"
+      phx-click={@push}
+      class={["riddler-back" | List.wrap(@class)]}
+      data-riddler-back
+    >
+      {@label}
+    </button>
     """
   end
 

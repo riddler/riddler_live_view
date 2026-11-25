@@ -63,7 +63,12 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"boolean question", boolean_question(%{})},
       {"boolean question, required, ticked, with help",
        boolean_question(%{"required" => true, "value" => true, "help" => "Twelve items."})},
-      {"frame around a choice question and a boolean question", choices()}
+      {"frame around a choice question and a boolean question", choices()},
+      {"button", button(%{})},
+      {"button that does not validate, with a style",
+       button(%{"validates" => false, "style" => "secondary"})},
+      {"back", back()},
+      {"frame around a question, two buttons and back", moves()}
     ]
   end
 
@@ -78,7 +83,9 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"every input has a label naming it", &input_labelled/1},
       {"aria-describedby names ids in the markup", &describedby_resolves/1},
       {"every fieldset opens on a legend with text", &fieldset_has_legend/1},
-      {"every select is named by a label or by text it is labelled by", &select_named/1}
+      {"every select is named by a label or by text it is labelled by", &select_named/1},
+      {"every button has text", &button_has_text/1},
+      {"every button says its type", &button_typed/1}
     ]
   end
 
@@ -92,7 +99,9 @@ defmodule RiddlerLiveView.AccessibilityTest do
     "every input has a label naming it",
     "aria-describedby names ids in the markup",
     "every fieldset opens on a legend with text",
-    "every select is named by a label or by text it is labelled by"
+    "every select is named by a label or by text it is labelled by",
+    "every button has text",
+    "every button says its type"
   ]
 
   for name <- @rule_names do
@@ -121,7 +130,8 @@ defmodule RiddlerLiveView.AccessibilityTest do
         ~s(<p data-riddler-element="text">x</p>),
         ~s(<section class="" data-riddler-screen="s">x</section>),
         ~s(<legend data-riddler-legend>x</legend>),
-        ~s(<option data-riddler-option="a"></option>)
+        ~s(<option data-riddler-option="a"></option>),
+        ~s(<button type="button" data-riddler-back>Back</button>)
       ],
       "no empty heading" => [~s(<h2 class="a"> </h2>), ~s(<h1></h1>)],
       "aria-labelledby names an id in the markup" => [
@@ -157,6 +167,19 @@ defmodule RiddlerLiveView.AccessibilityTest do
         ~s(<label for="other">Card</label><select class="a" id="s"></select>),
         ~s(<select class="a" aria-labelledby="missing"></select>),
         ~s(<select class="a" id="s" aria-labelledby="s"><option>A</option></select>)
+      ],
+      "every button has text" => [
+        ~s(<button class="a" type="submit"></button>),
+        ~s(<button class="a" type="button">  </button>),
+        ~s(<button class="a" type="button"><span></span></button>),
+        ~s(<button class="a" type="submit">Continue</button><button class="b" type="button"></button>)
+      ],
+      "every button says its type" => [
+        ~s(<button class="a">Continue</button>),
+        ~s(<button class="a" type="">Continue</button>),
+        ~s(<button class="a" type="reset">Clear</button>),
+        ~s(<button class="a" data-type="submit">Continue</button>),
+        ~s(<button class="a" type="submit">Continue</button><button class="b">Back</button>)
       ]
     }
 
@@ -175,7 +198,7 @@ defmodule RiddlerLiveView.AccessibilityTest do
 
   # Sabotage: drop the class attribute from the text component's <p>.
   defp component_has_class(html) do
-    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held|legend|option)\b[^>]*)>/
+    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held|legend|option|back)\b[^>]*)>/
     |> Regex.scan(html, capture: :all_but_first)
     |> List.flatten()
     |> Enum.reject(&(&1 =~ ~r/\sclass="[^"\s][^"]*"/))
@@ -233,6 +256,22 @@ defmodule RiddlerLiveView.AccessibilityTest do
         nil -> false
       end
     end)
+  end
+
+  # Sabotage: render the button component with no text.
+  defp button_has_text(html) do
+    ~r{<button\b[^>]*>(.*?)</button>}s
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.filter(&(&1 |> String.replace(~r/<[^>]*>/, "") |> String.trim() == ""))
+  end
+
+  # Sabotage: drop type="button" from the Back control.
+  defp button_typed(html) do
+    ~r/<button\b([^>]*)>/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.reject(&(&1 =~ ~r/\stype="(?:submit|button)"/))
   end
 
   # Sabotage: point the select's aria-labelledby at an id the legend does not carry.
@@ -444,6 +483,58 @@ defmodule RiddlerLiveView.AccessibilityTest do
       <Components.choice_question element={@card} />
       <Components.choice_question element={@branches} />
       <Components.boolean_question element={@rules} />
+    </Components.frame>
+    """)
+  end
+
+  @moves %{"outcomes" => ["details_submitted", "card_type_changed"], "back" => true}
+
+  defp button(fields) do
+    element =
+      Map.merge(
+        %{
+          "type" => "button",
+          "key" => "details_continue",
+          "label" => "Continue",
+          "outcome" => "details_submitted"
+        },
+        fields
+      )
+
+    assigns = %{element: element, moves: @moves}
+    rendered_to_string(~H"<Components.button element={@element} moves={@moves} />")
+  end
+
+  defp back do
+    assigns = %{screen: @screen, moves: @moves}
+    rendered_to_string(~H"<Components.back screen={@screen} moves={@moves} />")
+  end
+
+  defp moves do
+    assigns = %{
+      screen: @screen,
+      moves: @moves,
+      email: %{"key" => "reminder_email", "label" => "Email", "required" => true},
+      continue: %{
+        "key" => "details_continue",
+        "label" => "Continue",
+        "outcome" => "details_submitted",
+        "style" => "primary"
+      },
+      change: %{
+        "key" => "details_change",
+        "label" => "Change card type",
+        "outcome" => "card_type_changed",
+        "validates" => false
+      }
+    }
+
+    rendered_to_string(~H"""
+    <Components.frame screen={@screen}>
+      <Components.text_question element={@email} />
+      <Components.button element={@continue} moves={@moves} />
+      <Components.button element={@change} moves={@moves} />
+      <Components.back screen={@screen} moves={@moves} />
     </Components.frame>
     """)
   end
