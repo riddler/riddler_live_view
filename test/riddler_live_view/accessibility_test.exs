@@ -68,7 +68,28 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"button that does not validate, with a style",
        button(%{"validates" => false, "style" => "secondary"})},
       {"back", back()},
-      {"frame around a question, two buttons and back", moves()}
+      {"frame around a question, two buttons and back", moves()},
+      {"text question with an author's finding and help",
+       text_question(%{"help" => "Weekly."}, [
+         finding("response.format", "reminder_email", "Check the address.")
+       ])},
+      {"secret question, held, with two findings and help",
+       secret_question(%{"held" => true, "help" => "Four digits."}, [
+         finding("response.required", "card_pin"),
+         finding("response.invalid_shape", "card_pin")
+       ])},
+      {"choice question, one, with a finding",
+       choice_question(%{"help" => "Ask."}, [finding("response.required", "card_type")])},
+      {"choice question, many, list, with a finding",
+       choice_question(%{"select" => "many", "style" => "list"}, [
+         finding("response.out_of_range", "card_type")
+       ])},
+      {"boolean question with a finding",
+       boolean_question(%{}, [finding("response.required", "agrees_to_rules")])},
+      {"text question with another question's finding",
+       text_question(%{}, [finding("response.required", "card_pin")])},
+      {"frame around questions with their findings and the screen's own", refused(true)},
+      {"frame around questions with their findings only", refused(false)}
     ]
   end
 
@@ -85,7 +106,9 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"every fieldset opens on a legend with text", &fieldset_has_legend/1},
       {"every select is named by a label or by text it is labelled by", &select_named/1},
       {"every button has text", &button_has_text/1},
-      {"every button says its type", &button_typed/1}
+      {"every button says its type", &button_typed/1},
+      {"aria-invalid only on a form control that names a finding", &invalid_names_finding/1},
+      {"focus moves only to a finding in the markup that can take it", &focus_reaches_finding/1}
     ]
   end
 
@@ -101,7 +124,9 @@ defmodule RiddlerLiveView.AccessibilityTest do
     "every fieldset opens on a legend with text",
     "every select is named by a label or by text it is labelled by",
     "every button has text",
-    "every button says its type"
+    "every button says its type",
+    "aria-invalid only on a form control that names a finding",
+    "focus moves only to a finding in the markup that can take it"
   ]
 
   for name <- @rule_names do
@@ -180,6 +205,17 @@ defmodule RiddlerLiveView.AccessibilityTest do
         ~s(<button class="a" type="reset">Clear</button>),
         ~s(<button class="a" data-type="submit">Continue</button>),
         ~s(<button class="a" type="submit">Continue</button><button class="b">Back</button>)
+      ],
+      "aria-invalid only on a form control that names a finding" => [
+        ~s(<input class="a" aria-invalid="true"/>),
+        ~s(<p id="h" class="h">Help</p><input class="a" aria-invalid="true" aria-describedby="h"/>),
+        ~s(<p id="f" class="f" data-riddler-finding="x">F</p><div class="a" aria-invalid="true" aria-describedby="f"></div>),
+        ~s(<input class="a" aria-invalid="false"/>)
+      ],
+      "focus moves only to a finding in the markup that can take it" => [
+        ~s(<span class="a" hidden phx-mounted="[[&quot;focus&quot;,{&quot;to&quot;:&quot;#f&quot;}]]"></span>),
+        ~s(<p id="f" class="f" data-riddler-finding="x">F</p><span class="a" phx-mounted="[[&quot;focus&quot;,{&quot;to&quot;:&quot;#f&quot;}]]"></span>),
+        ~s(<p id="h" class="h" tabindex="-1">Help</p><span class="a" phx-mounted="[[&quot;focus&quot;,{&quot;to&quot;:&quot;#h&quot;}]]"></span>)
       ]
     }
 
@@ -198,7 +234,7 @@ defmodule RiddlerLiveView.AccessibilityTest do
 
   # Sabotage: drop the class attribute from the text component's <p>.
   defp component_has_class(html) do
-    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held|legend|option|back)\b[^>]*)>/
+    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held|legend|option|back|finding|focus)\b[^>]*)>/
     |> Regex.scan(html, capture: :all_but_first)
     |> List.flatten()
     |> Enum.reject(&(&1 =~ ~r/\sclass="[^"\s][^"]*"/))
@@ -351,6 +387,104 @@ defmodule RiddlerLiveView.AccessibilityTest do
     end
   end
 
+  # Sabotage: set aria-invalid on the text question's input whatever its findings.
+  defp invalid_names_finding(html) do
+    findings =
+      ~r/<[a-z]+\b[^>]*\sid="([^"]+)"[^>]*\sdata-riddler-finding="/
+      |> Regex.scan(html, capture: :all_but_first)
+      |> List.flatten()
+
+    ~r/<([a-z]+)\b([^>]*\saria-invalid="[^"]*"[^>]*)>/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> Enum.reject(fn [tag, attrs] ->
+      described =
+        case Regex.run(~r/\saria-describedby="([^"]*)"/, attrs) do
+          [_, names] -> String.split(names)
+          nil -> []
+        end
+
+      tag in ~w(input select textarea) and attrs =~ ~s( aria-invalid="true") and
+        Enum.any?(described, &(&1 in findings))
+    end)
+  end
+
+  # Sabotage: drop tabindex="-1" from the finding paragraph.
+  defp focus_reaches_finding(html) do
+    findings =
+      ~r/<[a-z]+\b([^>]*\bdata-riddler-finding="[^>]*)>/
+      |> Regex.scan(html, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.filter(&(&1 =~ ~s( tabindex="-1")))
+      |> Enum.flat_map(&(Regex.run(~r/\sid="([^"]+)"/, &1, capture: :all_but_first) || []))
+
+    ~r/\sphx-mounted="([^"]*)"/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.flat_map(fn json ->
+      json
+      |> String.replace("&quot;", "\"")
+      |> String.replace("&amp;", "&")
+      |> Jason.decode!()
+      |> Enum.flat_map(&unreached_focus(&1, findings))
+    end)
+  end
+
+  defp unreached_focus(["focus", %{"to" => "#" <> id}], findings),
+    do: if(id in findings, do: [], else: [id])
+
+  defp unreached_focus(command, _findings), do: [inspect(command)]
+
+  defp finding(code, element_key, author_message \\ nil) do
+    %{
+      "code" => code,
+      "message" => "m",
+      "element_key" => element_key,
+      "author_message" => author_message
+    }
+  end
+
+  defp refused(screen_level?) do
+    findings =
+      [
+        finding("response.format", "reminder_email"),
+        finding("response.required", "card_pin"),
+        finding("response.required", "card_type"),
+        finding("response.required", "agrees_to_rules")
+      ] ++ if(screen_level?, do: [finding("submit.missing_field", nil)], else: [])
+
+    assigns = %{
+      screen: %{
+        @screen
+        | "elements" => [
+            %{"type" => "text_question", "key" => "reminder_email"},
+            %{"type" => "secret_question", "key" => "card_pin"},
+            %{"type" => "choice_question", "key" => "card_type"},
+            %{"type" => "boolean_question", "key" => "agrees_to_rules"}
+          ]
+      },
+      findings: findings,
+      email: %{"key" => "reminder_email", "label" => "Email", "help" => "Weekly."},
+      pin: %{"key" => "card_pin", "label" => "Card PIN", "held" => true},
+      card: %{
+        "key" => "card_type",
+        "label" => "Card",
+        "select" => "one",
+        "help" => "Ask.",
+        "answer_options" => [%{"value" => "adult", "label" => "Adult card"}]
+      },
+      rules: %{"key" => "agrees_to_rules", "label" => "I agree."}
+    }
+
+    rendered_to_string(~H"""
+    <Components.frame screen={@screen} findings={@findings}>
+      <Components.text_question element={@email} findings={@findings} />
+      <Components.secret_question element={@pin} findings={@findings} />
+      <Components.choice_question element={@card} findings={@findings} />
+      <Components.boolean_question element={@rules} findings={@findings} />
+    </Components.frame>
+    """)
+  end
+
   defp ids(html) do
     ~r/\sid="([^"]*)"/ |> Regex.scan(html, capture: :all_but_first) |> List.flatten()
   end
@@ -387,7 +521,7 @@ defmodule RiddlerLiveView.AccessibilityTest do
     rendered_to_string(~H"<Components.text element={@element} />")
   end
 
-  defp text_question(fields) do
+  defp text_question(fields, findings \\ []) do
     element =
       Map.merge(
         %{
@@ -399,11 +533,11 @@ defmodule RiddlerLiveView.AccessibilityTest do
         fields
       )
 
-    assigns = %{element: element}
-    rendered_to_string(~H"<Components.text_question element={@element} />")
+    assigns = %{element: element, findings: findings}
+    rendered_to_string(~H"<Components.text_question element={@element} findings={@findings} />")
   end
 
-  defp secret_question(fields) do
+  defp secret_question(fields, findings \\ []) do
     element =
       Map.merge(
         %{
@@ -415,11 +549,11 @@ defmodule RiddlerLiveView.AccessibilityTest do
         fields
       )
 
-    assigns = %{element: element}
-    rendered_to_string(~H"<Components.secret_question element={@element} />")
+    assigns = %{element: element, findings: findings}
+    rendered_to_string(~H"<Components.secret_question element={@element} findings={@findings} />")
   end
 
-  defp choice_question(fields) do
+  defp choice_question(fields, findings \\ []) do
     element =
       Map.merge(
         %{
@@ -435,11 +569,11 @@ defmodule RiddlerLiveView.AccessibilityTest do
         fields
       )
 
-    assigns = %{element: element}
-    rendered_to_string(~H"<Components.choice_question element={@element} />")
+    assigns = %{element: element, findings: findings}
+    rendered_to_string(~H"<Components.choice_question element={@element} findings={@findings} />")
   end
 
-  defp boolean_question(fields) do
+  defp boolean_question(fields, findings \\ []) do
     element =
       Map.merge(
         %{
@@ -450,8 +584,11 @@ defmodule RiddlerLiveView.AccessibilityTest do
         fields
       )
 
-    assigns = %{element: element}
-    rendered_to_string(~H"<Components.boolean_question element={@element} />")
+    assigns = %{element: element, findings: findings}
+
+    rendered_to_string(
+      ~H"<Components.boolean_question element={@element} findings={@findings} />"
+    )
   end
 
   defp choices do
