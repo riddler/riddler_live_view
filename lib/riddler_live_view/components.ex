@@ -11,7 +11,8 @@ defmodule RiddlerLiveView.Components do
     * `frame/1` draws the screen around its elements: the title, and
       progress when the answer carries it.
     * One component per element kind, named for the kind it renders:
-      `heading/1`, `text/1`, `text_question/1` and `secret_question/1`.
+      `heading/1`, `text/1`, `text_question/1`, `secret_question/1`,
+      `choice_question/1` and `boolean_question/1`.
 
   The markup ships no stylesheet and no CSS framework class. Every component
   carries a `class` attribute, and a host may add its own classes through
@@ -21,7 +22,8 @@ defmodule RiddlerLiveView.Components do
 
     * `data-riddler-element` on the markup of each element, whose value is
       the element's kind, the `"type"` the answer gives it (`"heading"`,
-      `"text"`, `"text_question"`, `"secret_question"`);
+      `"text"`, `"text_question"`, `"secret_question"`,
+      `"choice_question"`, `"boolean_question"`);
     * `data-riddler-key` on the markup of each element, whose value is the
       element's `"key"`;
     * `data-riddler-screen` on the frame, whose value is the screen's
@@ -31,7 +33,13 @@ defmodule RiddlerLiveView.Components do
       container its elements render in;
     * `data-riddler-label`, `data-riddler-input`, `data-riddler-help` and
       `data-riddler-held` on a question's label, its input, its help and
-      the paragraph that says a secret question's value is held.
+      the paragraph that says a secret question's value is held;
+    * `data-riddler-legend` on a choice question's legend, and
+      `data-riddler-option` on each of its options, whose value is the
+      option's `"value"`;
+    * `data-riddler-select` on a choice question, `"one"` or `"many"`, and
+      `data-riddler-min-selections` and `data-riddler-max-selections`
+      where it carries those bounds under `"many"`.
 
   A secret question's input never carries a value: no `value` attribute,
   whatever the element carries, and `autocomplete="off"`.
@@ -317,9 +325,230 @@ defmodule RiddlerLiveView.Components do
     """
   end
 
+  @doc """
+  Renders a `choice_question` element as a fieldset of options whose legend
+  is the question's `"label"`.
+
+  The question's `"select"` fixes what the visitor picks: one option under
+  `"one"`, any number under `"many"`. Its `"style"` picks how the options are
+  drawn, from the hints riddler names:
+
+    * under `"one"`, `"radio"` draws a radio button per option and
+      `"dropdown"` a `<select>` that opens on an empty option, which
+      submits an empty value where the visitor chooses none;
+    * under `"many"`, `"checkboxes"` draws a checkbox per option and
+      `"list"` a `<select multiple>`;
+    * no style, or a style the package does not draw, draws radio buttons
+      under `"one"` and checkboxes under `"many"`.
+
+  Each option's `"label"` is what the visitor reads and its `"value"` is
+  what the input submits. The value the answer presents for the question, a
+  response the visitor already gave or its prefill or default, is drawn
+  chosen: under `"one"` the option whose value it is, under `"many"` every
+  option whose value is in its list. A presented value of another shape
+  chooses nothing.
+
+  Under `"one"` the inputs carry `required` where the question is required.
+  Under `"many"` nothing is marked `required`, since a required checkbox is
+  one that must itself be ticked; the bounds riddler reads under `"many"`,
+  `"min_selections"` and `"max_selections"`, are carried as the fieldset's
+  `data-riddler-min-selections` and `data-riddler-max-selections` and are
+  not enforced in the browser: riddler validates what the visitor submits
+  against them.
+
+  The question's `"help"`, when it has one, is a paragraph the fieldset
+  names as its description. Each option input's `id` is derived from the
+  question's `"key"` and the option's `"value"`, a `<select>`'s from the key
+  alone, and the `name` is the key unless the host passes one; under
+  `"many"` the name ends in `[]`, so the submitted params carry a list.
+  """
+  attr(:element, :map,
+    required: true,
+    doc:
+      "A `choice_question` element of the answer: its `\"key\"`, `\"label\"`, `\"select\"` and `\"answer_options\"`, each a `\"value\"` and a `\"label\"`, and, where present, `\"help\"`, `\"required\"`, `\"style\"`, `\"min_selections\"`, `\"max_selections\"` and `\"value\"`."
+  )
+
+  attr(:name, :string,
+    default: nil,
+    doc: "The inputs' `name`; the element's `\"key\"` when nil, with `[]` added under `\"many\"`."
+  )
+
+  attr(:class, :any, default: nil, doc: "Classes added to the question's own.")
+
+  @spec choice_question(map()) :: Phoenix.LiveView.Rendered.t()
+  def choice_question(assigns) do
+    element = assigns.element
+    key = element["key"]
+    many = element["select"] == "many"
+    help = present_text(element["help"])
+    chosen = chosen_values(element["value"], many)
+
+    options =
+      for option <- List.wrap(element["answer_options"]) do
+        %{
+          value: option["value"],
+          label: option["label"],
+          id: option_id(key, option["value"]),
+          chosen: option["value"] in chosen
+        }
+      end
+
+    assigns =
+      assign(assigns,
+        options: options,
+        many: many,
+        drawn_as: choice_drawn_as(element["style"], many),
+        legend_id: legend_id(key),
+        select_id: input_id(key),
+        input_name: choice_name(assigns.name || key, many),
+        required: not many and element["required"] == true,
+        min_selections: many && selection_bound(element["min_selections"]),
+        max_selections: many && selection_bound(element["max_selections"]),
+        help: help,
+        described_by: help && help_id(key)
+      )
+
+    ~H"""
+    <fieldset
+      class={["riddler-choice-question" | List.wrap(@class)]}
+      data-riddler-element="choice_question"
+      data-riddler-key={@element["key"]}
+      data-riddler-select={if(@many, do: "many", else: "one")}
+      data-riddler-min-selections={@min_selections}
+      data-riddler-max-selections={@max_selections}
+      aria-describedby={@described_by}
+    >
+      <legend id={@legend_id} class="riddler-legend" data-riddler-legend>{@element["label"]}</legend>
+      <div
+        :for={option <- @options}
+        :if={@drawn_as == :inputs}
+        class="riddler-option"
+        data-riddler-option={option.value}
+      >
+        <input
+          type={if(@many, do: "checkbox", else: "radio")}
+          id={option.id}
+          name={@input_name}
+          value={option.value}
+          checked={option.chosen}
+          required={@required}
+          class="riddler-input"
+          data-riddler-input
+        />
+        <label for={option.id} class="riddler-label" data-riddler-label>{option.label}</label>
+      </div>
+      <select
+        :if={@drawn_as == :select}
+        id={@select_id}
+        name={@input_name}
+        multiple={@many}
+        required={@required}
+        aria-labelledby={@legend_id}
+        class="riddler-select"
+        data-riddler-input
+      >
+        <option :if={not @many} value=""></option>
+        <option
+          :for={option <- @options}
+          value={option.value}
+          selected={option.chosen}
+          class="riddler-option"
+          data-riddler-option={option.value}
+        >
+          {option.label}
+        </option>
+      </select>
+      <p :if={@help} id={@described_by} class="riddler-help" data-riddler-help>{@help}</p>
+    </fieldset>
+    """
+  end
+
+  @doc """
+  Renders a `boolean_question` element as a lone labelled checkbox.
+
+  The question's `"label"` is the checkbox's `<label>`, and the checkbox
+  submits `"true"` when it is ticked; an unticked checkbox submits nothing.
+  It is drawn ticked where the answer presents `true` for the question.
+
+  The checkbox carries `required` where the question is required: riddler
+  reads a required boolean question as one whose response must be `true`,
+  which is what `required` asks of a checkbox. The question's `"help"`, when
+  it has one, is a paragraph the checkbox names as its description.
+
+  The checkbox's `id` is derived from the question's `"key"`, and its
+  `name` is the key unless the host passes one.
+  """
+  attr(:element, :map,
+    required: true,
+    doc:
+      "A `boolean_question` element of the answer: its `\"key\"` and `\"label\"` and, where present, `\"help\"`, `\"required\"` and `\"value\"`."
+  )
+
+  attr(:name, :string,
+    default: nil,
+    doc: "The checkbox's `name`; the element's `\"key\"` when nil."
+  )
+
+  attr(:class, :any, default: nil, doc: "Classes added to the question's own.")
+
+  @spec boolean_question(map()) :: Phoenix.LiveView.Rendered.t()
+  def boolean_question(assigns) do
+    key = assigns.element["key"]
+    help = present_text(assigns.element["help"])
+
+    assigns =
+      assign(assigns,
+        input_id: input_id(key),
+        input_name: assigns.name || key,
+        checked: assigns.element["value"] == true,
+        required: assigns.element["required"] == true,
+        help: help,
+        described_by: help && help_id(key)
+      )
+
+    ~H"""
+    <div
+      class={["riddler-boolean-question" | List.wrap(@class)]}
+      data-riddler-element="boolean_question"
+      data-riddler-key={@element["key"]}
+    >
+      <input
+        type="checkbox"
+        id={@input_id}
+        name={@input_name}
+        value="true"
+        checked={@checked}
+        required={@required}
+        aria-describedby={@described_by}
+        class="riddler-input"
+        data-riddler-input
+      />
+      <label for={@input_id} class="riddler-label" data-riddler-label>{@element["label"]}</label>
+      <p :if={@help} id={@described_by} class="riddler-help" data-riddler-help>{@help}</p>
+    </div>
+    """
+  end
+
   defp input_id(key), do: "riddler-element-#{key}"
   defp help_id(key), do: "riddler-element-#{key}-help"
   defp held_id(key), do: "riddler-element-#{key}-held"
+
+  defp legend_id(key), do: "riddler-element-#{key}-legend"
+  defp option_id(key, value), do: "riddler-element-#{key}-option-#{value}"
+
+  defp choice_drawn_as("dropdown", false), do: :select
+  defp choice_drawn_as("list", true), do: :select
+  defp choice_drawn_as(_style, _many), do: :inputs
+
+  defp choice_name(name, true), do: name <> "[]"
+  defp choice_name(name, false), do: name
+
+  defp chosen_values(value, false) when is_binary(value), do: [value]
+  defp chosen_values(values, true) when is_list(values), do: Enum.filter(values, &is_binary/1)
+  defp chosen_values(_value, _many), do: []
+
+  defp selection_bound(bound) when is_integer(bound) and bound >= 0, do: bound
+  defp selection_bound(_bound), do: nil
 
   defp input_type("email"), do: "email"
   defp input_type("phone"), do: "tel"
