@@ -1069,5 +1069,65 @@ defmodule RiddlerLiveView.JourneyTest do
         assert mount_journey() |> html() =~ ~s(data-riddler-refused)
       end)
     end
+
+    # Mutation: accept any retry_after_ms in shaped?/1 - goes red.
+    test "refuses, or keeps what is drawn, for a waiting answer whose retry_after_ms riddler never gives" do
+      socket = mount_journey()
+
+      for ms <- [-1, "5", 1.5] do
+        waiting = %{"state" => "waiting", "retry_after_ms" => ms}
+        Process.put({:misbehave, :submit}, {:answer, {:ok, waiting}})
+
+        log =
+          capture_log(fn ->
+            kept =
+              try do
+                event(socket, "submit", form("details_submitted", @filled))
+              rescue
+                exception -> exception
+              end
+
+            assert %Socket{} = kept
+            assert kept.assigns == socket.assigns
+          end)
+
+        assert log =~ "the host's submit/2 answered outside its contract"
+
+        set_status("J-1", {:screen, "patron_details"})
+        {:ok, scope} = Scope.new("patron", "P-1001")
+        Process.put({:misbehave, :present}, {:answer, {:ok, scope, waiting}})
+
+        capture_log(fn ->
+          mounted =
+            try do
+              mount_journey()
+            rescue
+              exception -> exception
+            end
+
+          assert %Socket{} = mounted
+          assert html(mounted) =~ ~s(data-riddler-refused)
+        end)
+
+        Process.delete({:misbehave, :present})
+      end
+    end
+
+    # Mutation: hand retry_after_ms to the timer uncapped - goes red.
+    test "waits the longest timer the runtime sets for a longer retry_after_ms" do
+      set_status("J-1", {:waiting, %{"retry_after_ms" => 4_294_967_296}})
+
+      mounted =
+        try do
+          mount_journey()
+        rescue
+          exception -> exception
+        end
+
+      assert %Socket{} = mounted
+      assert html(mounted) =~ ~s(data-riddler-state="waiting")
+      assert Process.read_timer(mounted.assigns.retry) in 4_294_967_000..4_294_967_295
+      Process.cancel_timer(mounted.assigns.retry)
+    end
   end
 end
