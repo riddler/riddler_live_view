@@ -92,7 +92,10 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"frame around questions with their findings only", refused(false)},
       {"elements of the kinds the package draws", drawn_elements([])},
       {"elements with a kind nothing draws", drawn_elements([%{"type" => "rating_question"}])},
-      {"elements with a host's own kind", hosted_elements()}
+      {"elements with a host's own kind", hosted_elements()},
+      {"journey on a screen with findings and back", journey(:screen)},
+      {"journey waiting", journey(:waiting)},
+      {"journey done", journey(:done)}
     ]
   end
 
@@ -246,7 +249,7 @@ defmodule RiddlerLiveView.AccessibilityTest do
 
   # Sabotage: drop the class attribute from the text component's <p>.
   defp component_has_class(html) do
-    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held|legend|option|back|finding|focus|unknown)\b[^>]*)>/
+    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held|legend|option|back|finding|focus|unknown|journey|waiting|done)\b[^>]*)>/
     |> Regex.scan(html, capture: :all_but_first)
     |> List.flatten()
     |> Enum.reject(&(&1 =~ ~r/\sclass="[^"\s][^"]*"/))
@@ -775,6 +778,66 @@ defmodule RiddlerLiveView.AccessibilityTest do
       <Components.back screen={@screen} moves={@moves} />
     </Components.frame>
     """)
+  end
+
+  defp journey(state) do
+    screen = %{
+      "key" => "details",
+      "title" => "Patron registration",
+      "elements" => [
+        %{"type" => "text_question", "key" => "reminder_email", "label" => "Email"},
+        %{
+          "type" => "secret_question",
+          "key" => "card_pin",
+          "label" => "Card PIN",
+          "held" => true
+        },
+        %{
+          "type" => "button",
+          "key" => "details_continue",
+          "label" => "Continue",
+          "outcome" => "details_submitted"
+        }
+      ]
+    }
+
+    answer =
+      case state do
+        :screen ->
+          %{
+            "state" => "screen",
+            "screen" => screen,
+            "moves" => %{"outcomes" => ["details_submitted"], "back" => true},
+            "progress" => %{"step" => 2, "of" => 3}
+          }
+
+        :waiting ->
+          %{"state" => "waiting", "reason" => "card_number_pending", "retry_after_ms" => 5000}
+
+        :done ->
+          %{"state" => "done"}
+      end
+
+    assigns = %{
+      __changed__: nil,
+      id: "registration",
+      class: nil,
+      answer: answer,
+      findings: [
+        finding("response.format", "reminder_email"),
+        finding("response.invalid_shape", nil)
+      ],
+      finding_text: %{},
+      refusals: 2,
+      id_prefix: nil,
+      components: %{},
+      unknown_text: nil,
+      waiting_text: "One moment.",
+      done_text: "All done.",
+      myself: %Phoenix.LiveComponent.CID{cid: 1}
+    }
+
+    rendered_to_string(RiddlerLiveView.Journey.render(assigns))
   end
 
   defp questions do

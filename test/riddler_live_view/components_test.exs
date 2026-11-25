@@ -324,7 +324,7 @@ defmodule RiddlerLiveView.ComponentsTest do
       assert [_, attrs] = Regex.run(~r{<input([^>]*)>}, html)
       assert attrs =~ ~s( type="password")
       assert attrs =~ ~s( id="riddler-element-card_pin")
-      assert attrs =~ ~s( name="card_pin")
+      assert attrs =~ ~s( name="riddler-password[card_pin]")
       assert attrs =~ ~s( autocomplete="off")
       assert attrs =~ ~s( class="riddler-input")
     end

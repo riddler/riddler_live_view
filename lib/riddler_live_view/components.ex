@@ -96,8 +96,16 @@ defmodule RiddlerLiveView.Components do
   first the frame draws itself, or else the first finding of the first
   question in the screen's `"elements"` that has one. It does so with a
   `phx-mounted` `Phoenix.LiveView.JS.focus/1` on a hidden trigger whose `id`
-  names that finding, so focus moves whenever the first finding changes; a
-  refusal that leaves the same first finding in place moves it no further.
+  names that finding, so focus moves whenever the first finding changes. A
+  refusal that leaves the same first finding in place moves it again only
+  where the host passes `refusals`, a count it changes on every refused
+  submit, as `RiddlerLiveView.Journey` does: the trigger's `id` carries the
+  count, so each refusal mounts a trigger of its own.
+
+  Every `id` a component derives opens on its `id_prefix`, `"riddler"` by
+  default, followed by the screen's or the question's `"key"`. A page that
+  draws two screens at once, or two Journeys, passes each its own prefix, so
+  no `id` is carried twice.
 
   ## Elements of a kind the package does not draw
 
@@ -165,8 +173,9 @@ defmodule RiddlerLiveView.Components do
   maximum is the number of steps; the package counts no steps itself. The
   elements render inside the frame's inner block.
 
-  The title's `id` is derived from the screen's `"key"`, so a page that
-  draws two frames of the same screen at once carries the id twice.
+  The title's `id` is derived from `id_prefix` and the screen's `"key"`, so
+  a page that draws two frames of the same screen at once passes each its
+  own `id_prefix`.
 
   Given `findings`, the frame draws, between its progress and its elements,
   each finding that names no question among the screen's `"elements"`, names
@@ -191,6 +200,12 @@ defmodule RiddlerLiveView.Components do
       "The text drawn, by finding code, for a finding whose author wrote no message, in place of the package's own."
   )
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   attr(:progress, :map,
     default: nil,
     doc:
@@ -202,28 +217,39 @@ defmodule RiddlerLiveView.Components do
     doc: "The accessible name of the progress bar."
   )
 
+  attr(:refusals, :integer,
+    default: nil,
+    doc:
+      "The number of submits refused so far, where the host counts them; each new count moves focus to the first finding again."
+  )
+
   attr(:class, :any, default: nil, doc: "Classes added to the frame's own.")
 
   slot(:inner_block, required: true, doc: "The screen's elements.")
 
   @spec frame(map()) :: Phoenix.LiveView.Rendered.t()
   def frame(assigns) do
-    %{screen: screen, findings: findings, finding_text: finding_text} = assigns
+    %{screen: screen, findings: findings, finding_text: finding_text, id_prefix: prefix} =
+      assigns
+
     questions = question_keys(screen["elements"])
 
     screen_findings =
       findings
       |> List.wrap()
       |> Enum.reject(&(finding_field(&1, :element_key) in questions))
-      |> drawn_findings("riddler-screen-#{screen["key"]}", finding_text)
+      |> drawn_findings(screen_id(prefix, screen["key"]), finding_text)
+
+    focus = first_finding_id(screen_findings, questions, findings, prefix)
 
     assigns =
       assign(assigns,
         title: present_text(screen["title"]),
-        title_id: "riddler-screen-#{screen["key"]}-title",
+        title_id: screen_id(prefix, screen["key"]) <> "-title",
         screen_findings: screen_findings,
         described_by: described_by(screen_findings, []),
-        focus: first_finding_id(screen_findings, questions, findings)
+        focus: focus,
+        focus_id: focus && focus_trigger_id(focus, assigns.refusals)
       )
 
     ~H"""
@@ -249,7 +275,7 @@ defmodule RiddlerLiveView.Components do
       <.finding_list findings={@screen_findings} />
       <span
         :if={@focus}
-        id={"#{@focus}-focus"}
+        id={@focus_id}
         hidden
         class="riddler-focus"
         data-riddler-focus={@focus}
@@ -343,8 +369,8 @@ defmodule RiddlerLiveView.Components do
   the help, and marks the input `aria-invalid="true"`; the module's
   "Findings" section says what text each shows.
 
-  The input's `id` is derived from the question's `"key"`, and its `name`
-  is the key unless the host passes one.
+  The input's `id` is derived from `id_prefix` and the question's `"key"`,
+  and its `name` is the key unless the host passes one.
   """
   attr(:element, :map,
     required: true,
@@ -368,23 +394,30 @@ defmodule RiddlerLiveView.Components do
       "The text drawn, by finding code, for a finding whose author wrote no message, in place of the package's own."
   )
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   @spec text_question(map()) :: Phoenix.LiveView.Rendered.t()
   def text_question(assigns) do
     key = assigns.element["key"]
+    prefix = assigns.id_prefix
     help = present_text(assigns.element["help"])
     findings = element_findings(assigns, key)
 
     assigns =
       assign(assigns,
-        input_id: input_id(key),
+        input_id: input_id(prefix, key),
         input_name: assigns.name || key,
         input_type: input_type(assigns.element["format"]),
         value: present_value(assigns.element["value"]),
         help: help,
-        help_id: help_id(key),
+        help_id: help_id(prefix, key),
         drawn_findings: findings,
         invalid: invalid(findings),
-        described_by: described_by(findings, [help && help_id(key)])
+        described_by: described_by(findings, [help && help_id(prefix, key)])
       )
 
     ~H"""
@@ -432,8 +465,15 @@ defmodule RiddlerLiveView.Components do
   what is held and the help, and marks the input `aria-invalid="true"`. No
   finding carries the response, and a finding's `"message"` is not drawn.
 
-  The input's `id` is derived from the question's `"key"`, and its `name`
-  is the key unless the host passes one.
+  The input's `id` is derived from `id_prefix` and the question's `"key"`.
+  Its `name` is `riddler-password[` and the key and `]` unless the host
+  passes one, so the submitted params carry the value under
+  `"riddler-password"`, keyed by the question's key. LiveView logs the
+  params of every event at the `:debug` level after Phoenix's
+  `:filter_parameters`, whose default filters each parameter whose name
+  contains `password`; the name keeps the value out of that log line
+  wherever the host keeps that default. A host that passes its own `name`
+  keeps the value out of the log itself.
   """
   attr(:element, :map,
     required: true,
@@ -441,7 +481,10 @@ defmodule RiddlerLiveView.Components do
       "A `secret_question` element of the answer: its `\"key\"`, `\"label\"` and `\"held\"` and, where present, `\"help\"` and `\"required\"`."
   )
 
-  attr(:name, :string, default: nil, doc: "The input's `name`; the element's `\"key\"` when nil.")
+  attr(:name, :string,
+    default: nil,
+    doc: "The input's `name`; `riddler-password[` and the element's `\"key\"` and `]` when nil."
+  )
 
   attr(:held_text, :string,
     default: "A value is held.",
@@ -462,25 +505,33 @@ defmodule RiddlerLiveView.Components do
       "The text drawn, by finding code, for a finding whose author wrote no message, in place of the package's own."
   )
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   @spec secret_question(map()) :: Phoenix.LiveView.Rendered.t()
   def secret_question(assigns) do
     key = assigns.element["key"]
+    prefix = assigns.id_prefix
     held = assigns.element["held"] == true
     help = present_text(assigns.element["help"])
     findings = element_findings(assigns, key)
 
     assigns =
       assign(assigns,
-        input_id: input_id(key),
-        input_name: assigns.name || key,
+        input_id: input_id(prefix, key),
+        input_name: assigns.name || "riddler-password[#{key}]",
         held: held,
-        held_id: held_id(key),
+        held_id: held_id(prefix, key),
         help: help,
-        help_id: help_id(key),
+        help_id: help_id(prefix, key),
         required: assigns.element["required"] == true and not held,
         drawn_findings: findings,
         invalid: invalid(findings),
-        described_by: described_by(findings, [held && held_id(key), help && help_id(key)])
+        described_by:
+          described_by(findings, [held && held_id(prefix, key), help && help_id(prefix, key)])
       )
 
     ~H"""
@@ -540,10 +591,11 @@ defmodule RiddlerLiveView.Components do
   against them.
 
   The question's `"help"`, when it has one, is a paragraph the fieldset
-  names as its description. Each option input's `id` is derived from the
-  question's `"key"` and the option's `"value"`, a `<select>`'s from the key
-  alone, and the `name` is the key unless the host passes one; under
-  `"many"` the name ends in `[]`, so the submitted params carry a list.
+  names as its description. Each option input's `id` is derived from
+  `id_prefix`, the question's `"key"` and the option's `"value"`, a
+  `<select>`'s from the prefix and the key alone, and the `name` is the
+  key unless the host passes one; under `"many"` the name ends in `[]`, so
+  the submitted params carry a list.
 
   Given `findings`, the question draws those whose `element_key` is its
   `"key"` after its options, names them in the fieldset's description ahead
@@ -575,10 +627,17 @@ defmodule RiddlerLiveView.Components do
       "The text drawn, by finding code, for a finding whose author wrote no message, in place of the package's own."
   )
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   @spec choice_question(map()) :: Phoenix.LiveView.Rendered.t()
   def choice_question(assigns) do
     element = assigns.element
     key = element["key"]
+    prefix = assigns.id_prefix
     many = element["select"] == "many"
     help = present_text(element["help"])
     chosen = chosen_values(element["value"], many)
@@ -589,7 +648,7 @@ defmodule RiddlerLiveView.Components do
         %{
           value: option["value"],
           label: option["label"],
-          id: option_id(key, option["value"]),
+          id: option_id(prefix, key, option["value"]),
           chosen: option["value"] in chosen
         }
       end
@@ -599,18 +658,18 @@ defmodule RiddlerLiveView.Components do
         options: options,
         many: many,
         drawn_as: choice_drawn_as(element["style"], many),
-        legend_id: legend_id(key),
-        select_id: input_id(key),
+        legend_id: legend_id(prefix, key),
+        select_id: input_id(prefix, key),
         input_name: choice_name(assigns.name || key, many),
         required: not many and element["required"] == true,
         min_selections: many && selection_bound(element["min_selections"]),
         max_selections: many && selection_bound(element["max_selections"]),
         help: help,
-        help_id: help_id(key),
+        help_id: help_id(prefix, key),
         drawn_findings: findings,
         invalid: invalid(findings),
         finding_ids: described_by(findings, []),
-        described_by: described_by(findings, [help && help_id(key)])
+        described_by: described_by(findings, [help && help_id(prefix, key)])
       )
 
     ~H"""
@@ -679,6 +738,10 @@ defmodule RiddlerLiveView.Components do
   The question's `"label"` is the checkbox's `<label>`, and the checkbox
   submits `"true"` when it is ticked; an unticked checkbox submits nothing.
   It is drawn ticked where the answer presents `true` for the question.
+  riddler validates a boolean question's response as `true` or `false`, so
+  the code that hands the submit to riddler turns the submitted `"true"`
+  into `true` and an absent one into `false` first, as
+  `RiddlerLiveView.Journey` does.
 
   The checkbox carries `required` where the question is required: riddler
   reads a required boolean question as one whose response must be `true`,
@@ -689,8 +752,8 @@ defmodule RiddlerLiveView.Components do
   `"key"` after the label, names them in the checkbox's description ahead
   of the help, and marks the checkbox `aria-invalid="true"`.
 
-  The checkbox's `id` is derived from the question's `"key"`, and its
-  `name` is the key unless the host passes one.
+  The checkbox's `id` is derived from `id_prefix` and the question's
+  `"key"`, and its `name` is the key unless the host passes one.
   """
   attr(:element, :map,
     required: true,
@@ -717,23 +780,30 @@ defmodule RiddlerLiveView.Components do
       "The text drawn, by finding code, for a finding whose author wrote no message, in place of the package's own."
   )
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   @spec boolean_question(map()) :: Phoenix.LiveView.Rendered.t()
   def boolean_question(assigns) do
     key = assigns.element["key"]
+    prefix = assigns.id_prefix
     help = present_text(assigns.element["help"])
     findings = element_findings(assigns, key)
 
     assigns =
       assign(assigns,
-        input_id: input_id(key),
+        input_id: input_id(prefix, key),
         input_name: assigns.name || key,
         checked: assigns.element["value"] == true,
         required: assigns.element["required"] == true,
         help: help,
-        help_id: help_id(key),
+        help_id: help_id(prefix, key),
         drawn_findings: findings,
         invalid: invalid(findings),
-        described_by: described_by(findings, [help && help_id(key)])
+        described_by: described_by(findings, [help && help_id(prefix, key)])
       )
 
     ~H"""
@@ -774,14 +844,20 @@ defmodule RiddlerLiveView.Components do
 
   A button whose `"validates"` is `false` does not validate the screen it
   submits: it carries `formnovalidate`, so the browser's own checks do not
-  stop the press, and `data-riddler-validates="false"`, so the host knows to
-  submit it without validating the responses. Every other button carries
-  `data-riddler-validates="true"`, riddler's default. The submit names the
-  outcome, not the button's key: in a document riddler validates, no two
-  buttons a screen shows together raise one outcome, so the host finds the
-  pressed button, and whether it validates, by its outcome. The button's
-  `"style"`, a string from the open set riddler leaves to a renderer, is
-  carried as `data-riddler-style` and drawn no differently.
+  stop the press, and `data-riddler-validates="false"`. Every other button
+  carries `data-riddler-validates="true"`, riddler's default. The attribute
+  is a hook for a host's stylesheet, tests and client scripts, not the
+  server's source: a form submit carries only the pressed button's `name`
+  and `value`. The submit names the outcome, not the button's key: in a
+  document riddler validates, no two buttons a screen shows together raise
+  one outcome, so the host finds the pressed button, and whether it
+  validates, by its outcome. The button's `"style"`, a string from the open
+  set riddler leaves to a renderer, is carried as `data-riddler-style` and
+  drawn no differently.
+
+  The submitted outcome comes from the page and a visitor can change it, so
+  the host checks it is among the `"outcomes"` of the moves it presented
+  before it acts on it, as `Riddler.Journey.decode_submit/1` says.
 
   Given `blocked_by`, the `id` of the notice `elements/1` draws for a screen
   it cannot draw in full, the button is drawn `disabled`, names the notice
@@ -852,6 +928,10 @@ defmodule RiddlerLiveView.Components do
   LiveView, or the component named by `target`, handles the event and
   passes the request on. LiveView adds the button's own `"value"`, an empty
   string, to the params, and `Riddler.Journey.decode_submit/1` drops it.
+  The back request comes from the page and a visitor can send one the moves
+  did not offer, so the host checks that the moves it presented say
+  `"back"` is `true` before it acts on it, as
+  `Riddler.Journey.decode_submit/1` says.
   """
   attr(:screen, :map,
     required: true,
@@ -919,7 +999,8 @@ defmodule RiddlerLiveView.Components do
   `unknown_kinds/2` answers the same kinds for the host's submit. The
   module's "Elements of a kind the package does not draw" section says why.
 
-  The notice's `id` is derived from the screen's `"key"`.
+  The notice's `id` is derived from `id_prefix` and the screen's `"key"`,
+  and `id_prefix` passes to every question.
 
   Raises `ArgumentError` for a component map that names a kind the package
   draws, or whose value for a type is not a function of one argument: both
@@ -953,6 +1034,12 @@ defmodule RiddlerLiveView.Components do
       "The text drawn, by finding code, for a finding whose author wrote no message, passed to every question."
   )
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   attr(:unknown_text, :string,
     default: @unknown_fallback,
     doc: "The notice's text, drawn where the screen has an element nothing draws."
@@ -969,7 +1056,8 @@ defmodule RiddlerLiveView.Components do
       assign(assigns,
         items: List.wrap(screen["elements"]),
         unknown: unknown |> Enum.filter(&is_binary/1) |> Enum.join(" "),
-        notice_id: if(unknown != [], do: "riddler-screen-#{screen["key"]}-unknown"),
+        notice_id:
+          if(unknown != [], do: screen_id(assigns.id_prefix, screen["key"]) <> "-unknown"),
         notice: present_text(assigns.unknown_text) || @unknown_fallback
       )
 
@@ -991,6 +1079,7 @@ defmodule RiddlerLiveView.Components do
       findings={@findings}
       finding_text={@finding_text}
       blocked_by={@notice_id}
+      id_prefix={@id_prefix}
     />
     """
   end
@@ -1027,6 +1116,7 @@ defmodule RiddlerLiveView.Components do
   attr(:findings, :list, required: true)
   attr(:finding_text, :map, required: true)
   attr(:blocked_by, :string, required: true)
+  attr(:id_prefix, :string, required: true)
 
   defp element(assigns) do
     assigns = assign(assigns, drawer: drawer(assigns.element, assigns.components))
@@ -1039,24 +1129,28 @@ defmodule RiddlerLiveView.Components do
       element={@element}
       findings={@findings}
       finding_text={@finding_text}
+      id_prefix={@id_prefix}
     />
     <.secret_question
       :if={@drawer == "secret_question"}
       element={@element}
       findings={@findings}
       finding_text={@finding_text}
+      id_prefix={@id_prefix}
     />
     <.choice_question
       :if={@drawer == "choice_question"}
       element={@element}
       findings={@findings}
       finding_text={@finding_text}
+      id_prefix={@id_prefix}
     />
     <.boolean_question
       :if={@drawer == "boolean_question"}
       element={@element}
       findings={@findings}
       finding_text={@finding_text}
+      id_prefix={@id_prefix}
     />
     <.button :if={@drawer == "button"} element={@element} moves={@moves} blocked_by={@blocked_by} />
     {if is_function(@drawer), do: host_component(@drawer, assigns)}
@@ -1125,12 +1219,15 @@ defmodule RiddlerLiveView.Components do
     """
   end
 
-  defp element_findings(%{findings: findings, finding_text: finding_text}, key)
+  defp element_findings(
+         %{findings: findings, finding_text: finding_text, id_prefix: prefix},
+         key
+       )
        when is_binary(key) do
     findings
     |> List.wrap()
     |> Enum.filter(&(finding_field(&1, :element_key) == key))
-    |> drawn_findings("riddler-element-#{key}", finding_text)
+    |> drawn_findings(element_id(prefix, key), finding_text)
   end
 
   defp element_findings(_assigns, _key), do: []
@@ -1176,15 +1273,21 @@ defmodule RiddlerLiveView.Components do
 
   # The first finding of the screen: the frame's own first, else the first
   # finding of the first question, in the screen's order, that has one.
-  defp first_finding_id([%{id: id} | _], _questions, _findings), do: id
+  defp first_finding_id([%{id: id} | _], _questions, _findings, _prefix), do: id
 
-  defp first_finding_id([], questions, findings) do
+  defp first_finding_id([], questions, findings, prefix) do
     keys = findings |> List.wrap() |> Enum.map(&finding_field(&1, :element_key))
 
     Enum.find_value(questions, fn key ->
-      if key in keys, do: "riddler-element-#{key}-finding-1"
+      if key in keys, do: element_id(prefix, key) <> "-finding-1"
     end)
   end
+
+  # The focus trigger's id names the finding it moves focus to and, where
+  # the host counts refused submits, the count, so each refusal mounts a
+  # trigger of its own and focus moves again.
+  defp focus_trigger_id(focus, nil), do: "#{focus}-focus"
+  defp focus_trigger_id(focus, refusals), do: "#{focus}-focus-#{refusals}"
 
   defp invalid([]), do: nil
   defp invalid(_findings), do: "true"
@@ -1196,12 +1299,15 @@ defmodule RiddlerLiveView.Components do
     end
   end
 
-  defp input_id(key), do: "riddler-element-#{key}"
-  defp help_id(key), do: "riddler-element-#{key}-help"
-  defp held_id(key), do: "riddler-element-#{key}-held"
+  defp element_id(prefix, key), do: "#{prefix}-element-#{key}"
+  defp screen_id(prefix, key), do: "#{prefix}-screen-#{key}"
 
-  defp legend_id(key), do: "riddler-element-#{key}-legend"
-  defp option_id(key, value), do: "riddler-element-#{key}-option-#{value}"
+  defp input_id(prefix, key), do: element_id(prefix, key)
+  defp help_id(prefix, key), do: element_id(prefix, key) <> "-help"
+  defp held_id(prefix, key), do: element_id(prefix, key) <> "-held"
+
+  defp legend_id(prefix, key), do: element_id(prefix, key) <> "-legend"
+  defp option_id(prefix, key, value), do: element_id(prefix, key) <> "-option-#{value}"
 
   defp choice_drawn_as("dropdown", false), do: :select
   defp choice_drawn_as("list", true), do: :select

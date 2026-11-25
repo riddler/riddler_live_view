@@ -1,0 +1,715 @@
+defmodule RiddlerLiveView.JourneyTest do
+  @moduledoc """
+  `RiddlerLiveView.Journey` driven through its LiveComponent callbacks.
+
+  `RegistrationHost` is a host as `Riddler.Journey.Host` describes one: its
+  engine is a status and a root kept in the test process, it answers
+  through `Riddler.Journey.present/3`, validates a submit with
+  `Riddler.Screens.validate_screen/4` and seals a secret before it keeps
+  it. It reports every callback it is handed to the test process, so a test
+  can say a callback was never called.
+  """
+
+  use ExUnit.Case, async: true
+
+  import ExUnit.CaptureLog
+  import Phoenix.LiveViewTest, only: [rendered_to_string: 1]
+
+  alias Phoenix.LiveComponent.CID
+  alias Phoenix.LiveView.Socket
+  alias Plug.Conn.Query
+  alias Riddler.Screens.Document
+  alias RiddlerLiveView.Journey
+
+  @sentinel "pin-sentinel-7731"
+
+  defmodule LoggedLive do
+    use Phoenix.LiveView
+
+    @impl true
+    def render(assigns), do: ~H""
+  end
+
+  @document %{
+    "schema_version" => 2,
+    "id" => "patron_registration",
+    "screens" => [
+      %{
+        "key" => "patron_details",
+        "title" => "Get your library card",
+        "elements" => [
+          %{
+            "type" => "text_question",
+            "key" => "reminder_email",
+            "label" => "Email for due-date reminders",
+            "required" => true,
+            "format" => "email"
+          },
+          %{
+            "type" => "secret_question",
+            "key" => "card_pin",
+            "label" => "Choose a PIN for your card",
+            "required" => true
+          },
+          %{
+            "type" => "boolean_question",
+            "key" => "agrees_to_rules",
+            "label" => "I agree to the lending rules",
+            "required" => true
+          },
+          %{
+            "type" => "choice_question",
+            "key" => "interests",
+            "label" => "What do you like to borrow?",
+            "select" => "many",
+            "answer_options" => [
+              %{"value" => "books", "label" => "Books"},
+              %{"value" => "films", "label" => "Films"}
+            ]
+          },
+          %{
+            "type" => "button",
+            "key" => "details_next",
+            "label" => "Continue",
+            "outcome" => "details_submitted"
+          },
+          %{
+            "type" => "button",
+            "key" => "details_later",
+            "label" => "Finish later",
+            "outcome" => "details_deferred",
+            "validates" => false
+          }
+        ]
+      },
+      %{
+        "key" => "card_pickup",
+        "title" => "Pick up your card",
+        "elements" => [
+          %{"type" => "text", "key" => "pickup_note", "text" => "Bring a proof of address."},
+          %{
+            "type" => "button",
+            "key" => "pickup_done",
+            "label" => "Done",
+            "outcome" => "pickup_confirmed"
+          }
+        ]
+      },
+      %{
+        "key" => "branch_rating",
+        "title" => "Rate your branch",
+        "elements" => [
+          %{"type" => "rating_question", "key" => "branch_stars", "label" => "Stars"},
+          %{
+            "type" => "button",
+            "key" => "rating_next",
+            "label" => "Continue",
+            "outcome" => "rated"
+          }
+        ]
+      }
+    ]
+  }
+
+  defmodule RegistrationHost do
+    @behaviour Riddler.Journey.Host
+
+    alias Riddler.Journey
+    alias Riddler.Journey.Scope
+    alias Riddler.Screens
+
+    @next %{
+      "details_submitted" => "card_pickup",
+      "details_deferred" => "card_pickup",
+      "rated" => "card_pickup",
+      "pickup_confirmed" => :waiting
+    }
+
+    @impl true
+    def start(_path, _scope), do: {:error, :no_such_journey}
+
+    @impl true
+    def present(journey) do
+      send(self(), {:host, :present, journey})
+
+      case Process.get({:journey, journey}) do
+        nil -> {:error, :no_such_journey}
+        engine -> {:ok, scope(), answer(engine)}
+      end
+    end
+
+    @impl true
+    def submit(journey, submit) do
+      send(self(), {:host, :submit, journey, submit})
+
+      with %{} = engine <- Process.get({:journey, journey}) || {:error, :no_such_journey},
+           {:ok, root} <- accept(engine, submit) do
+        engine = %{
+          engine
+          | root: root,
+            status: next_status(submit["outcome"], engine.status)
+        }
+
+        Process.put({:journey, journey}, engine)
+        {:ok, answer(engine)}
+      end
+    end
+
+    @impl true
+    def back(journey, request) do
+      send(self(), {:host, :back, journey, request})
+
+      case Process.get({:journey, journey}) do
+        nil ->
+          {:error, :no_such_journey}
+
+        engine ->
+          engine = %{engine | status: {:screen, "patron_details"}}
+          Process.put({:journey, journey}, engine)
+          {:ok, answer(engine)}
+      end
+    end
+
+    # An outcome the engine has no move for leaves the Journey where it is.
+    defp next_status(outcome, status) do
+      case Map.fetch(@next, outcome) do
+        {:ok, :waiting} -> {:waiting, %{"retry_after_ms" => 5}}
+        {:ok, screen} -> {:screen, screen, %{"back" => true}}
+        :error -> status
+      end
+    end
+
+    defp accept(engine, submit) do
+      %{"screen" => screen, "outcome" => outcome, "responses" => responses} = submit
+      document = engine.document
+      held = Map.get(engine.root, "responses", %{})
+      root = Map.put(engine.root, "responses", Map.merge(held, responses))
+
+      with :ok <- Screens.validate_screen(document, screen, root, button_key(document, outcome)),
+           {:ok, sealed} <- Screens.seal_secrets(document, screen, root["responses"], &seal/1) do
+        {:ok, Map.put(root, "responses", sealed)}
+      end
+    end
+
+    # The host finds the pressed button by the outcome in its own document.
+    defp button_key(document, outcome) do
+      Enum.find_value(document.screens, fn screen ->
+        Enum.find_value(screen.elements, fn
+          %{type: "button", outcome: ^outcome, key: key} -> key
+          _element -> nil
+        end)
+      end)
+    end
+
+    defp seal(plaintext), do: {:ok, Base.encode16(:crypto.hash(:sha256, plaintext))}
+
+    defp answer(engine) do
+      {:ok, answer} = Journey.present(engine.document, engine.status, engine.root)
+      answer
+    end
+
+    defp scope do
+      {:ok, scope} = Scope.new("patron", "P-1001")
+      scope
+    end
+  end
+
+  setup do
+    document = Document.admit(@document)
+    put_engine("J-1", %{document: document, status: {:screen, "patron_details"}, root: %{}})
+    %{document: document}
+  end
+
+  defp put_engine(journey, engine), do: Process.put({:journey, journey}, engine)
+
+  defp engine(journey), do: Process.get({:journey, journey})
+
+  defp set_status(journey, status), do: put_engine(journey, %{engine("J-1") | status: status})
+
+  defp mount_journey(assigns \\ %{}) do
+    socket = %Socket{assigns: %{__changed__: %{}, myself: %CID{cid: 1}}, transport_pid: self()}
+    {:ok, socket} = Journey.mount(socket)
+
+    assigns =
+      Map.merge(%{id: "registration", journey: "J-1", host: RegistrationHost}, assigns)
+
+    {:ok, socket} = Journey.update(assigns, socket)
+    socket
+  end
+
+  defp html(socket), do: rendered_to_string(Journey.render(socket.assigns))
+
+  defp event(socket, name, params) do
+    {:noreply, socket} = Journey.handle_event(name, params, socket)
+    socket
+  end
+
+  defp form(outcome, fields) do
+    Map.merge(%{"riddler-screen" => "patron_details", "outcome" => outcome}, fields)
+  end
+
+  @filled %{
+    "reminder_email" => "ada@example.org",
+    "riddler-password" => %{"card_pin" => "4321"},
+    "agrees_to_rules" => "true",
+    "interests" => ["books"]
+  }
+
+  defp ids(html),
+    do: ~r/\sid="([^"]+)"/ |> Regex.scan(html, capture: :all_but_first) |> List.flatten()
+
+  describe "mount" do
+    # Mutation: draw nothing for a screen answer - goes red.
+    test "asks the host where the Journey is and draws the screen in a form" do
+      socket = mount_journey()
+      html = html(socket)
+
+      assert_received {:host, :present, "J-1"}
+      assert html =~ ~s(data-riddler-journey)
+      assert html =~ ~s(data-riddler-state="screen")
+      assert html =~ ~s(phx-submit="submit")
+      assert html =~ ~s(phx-value-riddler-screen="patron_details")
+      assert html =~ ~s(data-riddler-screen="patron_details")
+      assert html =~ ~s(data-riddler-key="reminder_email")
+      assert html =~ ~s(data-riddler-outcome="details_submitted")
+      assert html =~ ~s(name="outcome")
+      assert [_form] = Regex.scan(~r/<form\b[^>]*\sphx-target="1"/, html)
+    end
+
+    # Mutation: drop class, finding_text or unknown_text on the way to the components - goes red.
+    test "passes the host's class and texts to the markup it draws" do
+      fields = Map.put(@filled, "reminder_email", "ada")
+
+      html =
+        mount_journey(%{
+          class: "signup-journey",
+          finding_text: %{"response.format" => "Check it."}
+        })
+        |> event("submit", form("details_submitted", fields))
+        |> html()
+
+      assert html =~ ~s(class="riddler-journey signup-journey")
+      assert html =~ "Check it."
+
+      set_status("J-1", {:screen, "branch_rating"})
+      html = mount_journey(%{unknown_text: "Ask at the desk."}) |> html()
+
+      assert html =~ ~s(data-riddler-unknown="rating_question")
+      assert html =~ "Ask at the desk."
+      assert html =~ ~r/<button\b[^>]*\sdisabled/
+    end
+
+    # Mutation: drop the changed-Journey branch of update/2 - goes red.
+    test "presents another Journey when the host passes one" do
+      put_engine("J-2", %{engine("J-1") | status: :done})
+      socket = mount_journey()
+      assert_received {:host, :present, "J-1"}
+
+      {:ok, socket} = Journey.update(%{id: "registration", journey: "J-2"}, socket)
+
+      assert_received {:host, :present, "J-2"}
+      assert html(socket) =~ ~s(data-riddler-state="done")
+    end
+
+    # Mutation: derive ids from "riddler" whatever the Journey's id - goes red.
+    test "derives every id from the component's id, so two Journeys share none" do
+      put_engine("J-2", engine("J-1"))
+      one = mount_journey() |> html() |> ids()
+      two = mount_journey(%{id: "renewal", journey: "J-2"}) |> html() |> ids()
+
+      assert "registration-element-reminder_email" in one
+      assert "registration-screen-patron_details-title" in one
+      assert "renewal-element-reminder_email" in two
+      assert MapSet.disjoint?(MapSet.new(one), MapSet.new(two))
+    end
+
+    test "takes an id_prefix in place of the id" do
+      html = mount_journey(%{id_prefix: "signup"}) |> html()
+
+      assert html =~ ~s(id="signup-element-reminder_email")
+      refute html =~ ~s(id="registration-element-)
+    end
+
+    # Mutation: leave out the journey check in check_wiring! - goes red.
+    test "raises ArgumentError without a Journey or a host module" do
+      socket = %Socket{assigns: %{__changed__: %{}, myself: %CID{cid: 1}}, transport_pid: self()}
+      {:ok, socket} = Journey.mount(socket)
+
+      assert_raise ArgumentError, ~r/:journey/, fn ->
+        Journey.update(%{id: "registration", host: RegistrationHost}, socket)
+      end
+
+      assert_raise ArgumentError, ~r/:host/, fn ->
+        Journey.update(%{id: "registration", journey: "J-1"}, socket)
+      end
+    end
+
+    # Mutation: draw the screen held before a host's refusal - goes red.
+    test "draws nothing of a Journey the host does not have" do
+      html = mount_journey(%{journey: "J-404"}) |> html()
+
+      refute html =~ "data-riddler-state"
+      refute html =~ "<form"
+      refute html =~ "data-riddler-screen"
+    end
+
+    # Mutation: present on every update - goes red.
+    test "keeps the answer drawn on an update that does not ask for a refresh" do
+      socket = mount_journey()
+      assert_received {:host, :present, "J-1"}
+
+      {:ok, _socket} = Journey.update(%{id: "registration", finding_text: %{}}, socket)
+      refute_received {:host, :present, _journey}
+    end
+  end
+
+  describe "a submit" do
+    # Mutation: pass the ticked checkbox's "true" through unconverted - goes red.
+    test "hands the host the presented screen, the outcome and a response per question" do
+      socket = mount_journey() |> event("submit", form("details_submitted", @filled))
+
+      assert_received {:host, :submit, "J-1",
+                       %{
+                         "screen" => "patron_details",
+                         "outcome" => "details_submitted",
+                         "responses" => %{
+                           "reminder_email" => "ada@example.org",
+                           "card_pin" => "4321",
+                           "agrees_to_rules" => true,
+                           "interests" => ["books"]
+                         }
+                       }}
+
+      assert html(socket) =~ ~s(data-riddler-screen="card_pickup")
+      assert socket.assigns.findings == []
+    end
+
+    # Mutation: leave an unticked boolean or an empty "many" choice out - goes red.
+    test "sends false for an unticked boolean and [] for a many choice with nothing ticked" do
+      fields = Map.drop(@filled, ["agrees_to_rules", "interests"])
+      socket = mount_journey() |> event("submit", form("details_submitted", fields))
+
+      assert_received {:host, :submit, "J-1", %{"responses" => responses}}
+      assert %{"agrees_to_rules" => false, "interests" => []} = responses
+
+      assert [%{code: "response.required", element_key: "agrees_to_rules"}] =
+               socket.assigns.findings
+    end
+
+    # Mutation: hand on every key the form carries - goes red.
+    test "hands on nothing the form carries beyond the presented questions" do
+      fields = Map.merge(@filled, %{"is_staff" => "true", "_target" => ["reminder_email"]})
+      mount_journey() |> event("submit", form("details_submitted", fields))
+
+      assert_received {:host, :submit, "J-1", %{"responses" => responses}}
+
+      assert Map.keys(responses) |> Enum.sort() ==
+               ~w(agrees_to_rules card_pin interests reminder_email)
+    end
+
+    # Mutation: hand on an empty secret field as "" - goes red.
+    test "leaves an empty secret field out, so a held value stays held" do
+      socket = mount_journey() |> event("submit", form("details_submitted", @filled))
+      assert_received {:host, :submit, "J-1", _first}
+
+      socket = event(socket, "back", %{"screen" => "card_pickup", "back" => true, "value" => ""})
+      assert html(socket) =~ ~s(data-riddler-held)
+
+      fields = Map.put(@filled, "riddler-password", %{"card_pin" => ""})
+      socket = event(socket, "submit", form("details_submitted", fields))
+
+      assert_received {:host, :submit, "J-1", %{"responses" => responses}}
+      refute Map.has_key?(responses, "card_pin")
+      assert %{"card_pin" => %{"sealed" => _sealed}} = engine("J-1").root["responses"]
+      assert html(socket) =~ ~s(data-riddler-screen="card_pickup")
+    end
+
+    # Mutation: accept any outcome in pressed_button/3 - goes red.
+    test "refuses an outcome the moves did not list, without calling the host" do
+      socket = mount_journey()
+
+      for outcome <- ["card_issued", "pickup_confirmed", "", nil] do
+        params = form(outcome, @filled)
+        refused = event(socket, "submit", params)
+
+        refute_received {:host, :submit, _journey, _submit}
+        assert refused.assigns == socket.assigns
+      end
+
+      refused = event(socket, "submit", Map.delete(form("x", @filled), "outcome"))
+      refute_received {:host, :submit, _journey, _submit}
+      assert refused.assigns == socket.assigns
+    end
+
+    # Mutation: skip same_screen/2 on a submit - goes red.
+    test "refuses a form sent from a screen other than the one presented" do
+      socket = mount_journey()
+
+      for screen <- ["card_pickup", nil] do
+        params = Map.put(form("details_submitted", @filled), "riddler-screen", screen)
+        refused = event(socket, "submit", params)
+
+        refute_received {:host, :submit, _journey, _submit}
+        assert refused.assigns == socket.assigns
+      end
+    end
+
+    # Mutation: skip the unknown_kinds/2 check on a submit - goes red.
+    test "refuses a screen carrying an element nothing draws" do
+      set_status("J-1", {:screen, "branch_rating"})
+      socket = mount_journey()
+
+      params = %{"riddler-screen" => "branch_rating", "outcome" => "rated", "branch_stars" => "5"}
+      refused = event(socket, "submit", params)
+
+      refute_received {:host, :submit, _journey, _submit}
+      assert refused.assigns == socket.assigns
+    end
+
+    test "hands on a host kind's value where the component map names the kind" do
+      set_status("J-1", {:screen, "branch_rating"})
+
+      stars = fn assigns ->
+        Phoenix.HTML.raw("<p class=\"stars\">#{assigns.element["key"]}</p>")
+      end
+
+      socket = mount_journey(%{components: %{"rating_question" => stars}})
+      assert html(socket) =~ ~s(<p class="stars">branch_stars</p>)
+      refute html(socket) =~ "data-riddler-unknown"
+
+      params = %{"riddler-screen" => "branch_rating", "outcome" => "rated", "branch_stars" => "5"}
+      event(socket, "submit", params)
+
+      assert_received {:host, :submit, "J-1", %{"responses" => %{"branch_stars" => "5"}}}
+    end
+
+    test "refuses a submit while no screen is presented" do
+      set_status("J-1", :done)
+      socket = mount_journey()
+      refused = event(socket, "submit", form("details_submitted", @filled))
+
+      refute_received {:host, :submit, _journey, _submit}
+      assert refused.assigns == socket.assigns
+    end
+
+    # Mutation: reset the findings on a host's {:error, findings} - goes red.
+    test "draws the host's findings beside the questions they name" do
+      fields = Map.put(@filled, "reminder_email", "ada")
+      socket = mount_journey() |> event("submit", form("details_submitted", fields))
+      html = html(socket)
+
+      assert html =~ ~s(data-riddler-finding="response.format")
+      assert html =~ ~s(id="registration-element-reminder_email-finding-1")
+      assert html =~ ~s(data-riddler-screen="patron_details")
+    end
+
+    # Mutation: keep the refusal count fixed across refusals - goes red.
+    test "moves focus to the first finding on every refusal, the same one included" do
+      fields = Map.put(@filled, "reminder_email", "ada")
+      socket = mount_journey() |> event("submit", form("details_submitted", fields))
+      first = html(socket)
+      socket = event(socket, "submit", form("details_submitted", fields))
+      second = html(socket)
+
+      target = ~s(data-riddler-focus="registration-element-reminder_email-finding-1")
+      assert first =~ target
+      assert second =~ target
+      assert first =~ ~s(id="registration-element-reminder_email-finding-1-focus-1")
+      assert second =~ ~s(id="registration-element-reminder_email-finding-1-focus-2")
+      refute second =~ ~s(id="registration-element-reminder_email-finding-1-focus-1")
+    end
+
+    test "draws nothing of the Journey once the host answers it does not have it" do
+      socket = mount_journey()
+      Process.delete({:journey, "J-1"})
+      socket = event(socket, "submit", form("details_submitted", @filled))
+
+      refute html(socket) =~ "<form"
+      refute html(socket) =~ "data-riddler-state"
+    end
+  end
+
+  describe "the secret question's value" do
+    # Mutation: keep the submitted params in the Journey's assigns - goes red.
+    test "is absent from the assigns after the submit, from the markup and from the log" do
+      log =
+        capture_log([level: :debug], fn ->
+          socket = mount_journey()
+
+          refused =
+            event(
+              socket,
+              "submit",
+              form("details_submitted", %{
+                @filled
+                | "reminder_email" => "ada",
+                  "riddler-password" => %{"card_pin" => @sentinel}
+              })
+            )
+
+          refute inspect(refused.assigns, limit: :infinity, printable_limit: :infinity) =~
+                   @sentinel
+
+          refute html(refused) =~ @sentinel
+
+          accepted =
+            event(
+              socket,
+              "submit",
+              form("details_submitted", %{
+                @filled
+                | "riddler-password" => %{"card_pin" => @sentinel}
+              })
+            )
+
+          refute inspect(accepted.assigns, limit: :infinity, printable_limit: :infinity) =~
+                   @sentinel
+
+          refute html(accepted) =~ @sentinel
+
+          back = event(accepted, "back", %{"screen" => "card_pickup", "back" => true})
+          refute html(back) =~ @sentinel
+          assert html(back) =~ ~s(data-riddler-held)
+        end)
+
+      refute log =~ @sentinel
+    end
+
+    # Mutation: name the secret question's input by its key alone - goes red.
+    test "is filtered out of the line LiveView logs for the submit event" do
+      html = mount_journey() |> html()
+
+      [name] =
+        Regex.run(~r/<input type="password"[^>]*\sname="([^"]+)"/, html, capture: :all_but_first)
+
+      typed = Query.decode(URI.encode_www_form(name) <> "=" <> @sentinel)
+      params = Map.merge(form("details_submitted", @filled), typed)
+
+      log =
+        capture_log([level: :debug], fn ->
+          :telemetry.execute(
+            [:phoenix, :live_component, :handle_event, :start],
+            %{system_time: System.system_time()},
+            %{
+              socket: %Socket{view: LoggedLive},
+              component: Journey,
+              event: "submit",
+              params: params
+            }
+          )
+        end)
+
+      assert log =~ "HANDLE EVENT"
+      assert log =~ "reminder_email"
+      refute log =~ @sentinel
+    end
+  end
+
+  describe "back" do
+    test "hands the host the back request where the moves offer back" do
+      socket = mount_journey() |> event("submit", form("details_submitted", @filled))
+      assert html(socket) =~ ~s(data-riddler-back)
+
+      assert html(socket) =~
+               ~r/<button\b[^>]*phx-click="[^"]*&quot;target&quot;:1[^"]*"[^>]*data-riddler-back/
+
+      socket = event(socket, "back", %{"screen" => "card_pickup", "back" => true, "value" => ""})
+
+      assert_received {:host, :back, "J-1",
+                       %{"screen" => "card_pickup", "back" => true} = request}
+
+      assert map_size(request) == 2
+      assert html(socket) =~ ~s(data-riddler-screen="patron_details")
+    end
+
+    # Mutation: accept any back request whatever the moves - goes red.
+    test "refuses a back request the moves did not offer, without calling the host" do
+      socket = mount_journey()
+      refute html(socket) =~ ~s(data-riddler-back)
+
+      refused = event(socket, "back", %{"screen" => "patron_details", "back" => true})
+
+      refute_received {:host, :back, _journey, _request}
+      assert refused.assigns == socket.assigns
+    end
+
+    test "refuses a back request for another screen or of another shape" do
+      socket = mount_journey() |> event("submit", form("details_submitted", @filled))
+
+      for params <- [
+            %{"screen" => "patron_details", "back" => true},
+            %{"screen" => "card_pickup", "back" => "true"},
+            %{"screen" => "card_pickup", "back" => true, "outcome" => "pickup_confirmed"},
+            %{"back" => true}
+          ] do
+        refused = event(socket, "back", params)
+
+        refute_received {:host, :back, _journey, _request}
+        assert refused.assigns == socket.assigns
+      end
+    end
+  end
+
+  describe "waiting and done" do
+    # Mutation: set no timer for a waiting answer's retry_after_ms - goes red.
+    test "draws waiting and asks the host again after the hint" do
+      set_status("J-1", {:waiting, %{"reason" => "card_number_pending", "retry_after_ms" => 5}})
+      socket = mount_journey()
+      html = html(socket)
+
+      assert html =~ ~s(data-riddler-state="waiting")
+      assert html =~ ~s(data-riddler-reason="card_number_pending")
+      assert html =~ ~s(role="status")
+      assert html =~ "One moment."
+
+      assert_receive {:phoenix, :send_update,
+                      {{Journey, "registration"}, %{id: "registration", refresh: true} = update}}
+
+      set_status("J-1", :done)
+      {:ok, socket} = Journey.update(update, socket)
+
+      assert html(socket) =~ ~s(data-riddler-state="done")
+      assert html(socket) =~ "All done."
+    end
+
+    # Mutation: set the timer only when the Journey is presented on mount - goes red.
+    test "asks the host again after the hint when a submit lands in waiting" do
+      socket = mount_journey() |> event("submit", form("details_submitted", @filled))
+      params = %{"riddler-screen" => "card_pickup", "outcome" => "pickup_confirmed"}
+      socket = event(socket, "submit", params)
+
+      assert html(socket) =~ ~s(data-riddler-state="waiting")
+      assert_receive {:phoenix, :send_update, {{Journey, "registration"}, %{refresh: true}}}
+    end
+
+    # Mutation: set a new timer without cancelling the pending one - goes red.
+    test "cancels a pending timer before it sets the next" do
+      set_status("J-1", {:waiting, %{"retry_after_ms" => 60_000}})
+      socket = mount_journey()
+      first = socket.assigns.retry
+      assert is_integer(Process.read_timer(first))
+
+      {:ok, socket} = Journey.update(%{id: "registration", refresh: true}, socket)
+
+      assert Process.read_timer(first) == false
+      assert is_integer(Process.read_timer(socket.assigns.retry))
+    end
+
+    test "sets no timer for waiting without a hint" do
+      set_status("J-1", :waiting)
+      html = mount_journey(%{waiting_text: "Your card is on its way."}) |> html()
+
+      assert html =~ "Your card is on its way."
+      refute_receive {:phoenix, :send_update, _update}, 20
+    end
+
+    test "draws done in the host's words, and not the result" do
+      set_status("J-1", {:done, %{"card_number" => "EXAMPLE-CARD-0001"}})
+      html = mount_journey(%{done_text: "Your card is ready."}) |> html()
+
+      assert html =~ ~s(data-riddler-done)
+      assert html =~ "Your card is ready."
+      refute html =~ "EXAMPLE-CARD-0001"
+    end
+  end
+end

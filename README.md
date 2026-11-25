@@ -14,10 +14,10 @@ patron-registration screen looking the same wherever it is embedded, and keeps
 the host to what is its own: who may see a Journey, where it runs and what
 happens when a visitor submits.
 
-This version is unreleased. It carries the screen's frame and the components
-for the `heading`, `text`, `text_question`, `secret_question`,
-`choice_question` and `boolean_question` elements, and the package stays at
-0.0.0 until its first release.
+This version is unreleased. It carries the screen's frame, a component for
+each element kind riddler presents, and `RiddlerLiveView.Journey`, the
+LiveComponent that shows a Journey; the package stays at 0.0.0 until its first
+release.
 
 ## Installation
 
@@ -37,15 +37,23 @@ end
 
 ## Basic usage
 
-Render the screen of a patron registration from the answer Riddler gives for
-one step of a Journey, with the frame around its elements:
+Embed a patron's registration Journey in a LiveView, naming the Journey and
+the host's modules implementing `Riddler.Journey.Host` and
+`Riddler.Journey.Access`:
 
 ```heex
-<RiddlerLiveView.Components.frame screen={@answer["screen"]} progress={@answer["progress"]}>
-  <RiddlerLiveView.Components.heading element={%{"key" => "details_heading", "level" => 2, "text" => "Your details"}} />
-  <RiddlerLiveView.Components.text element={%{"key" => "reminder_note", "text" => "We send due-date reminders to this address."}} />
-</RiddlerLiveView.Components.frame>
+<.live_component
+  module={RiddlerLiveView.Journey}
+  id="registration"
+  journey={@journey}
+  host={Library.RegistrationHost}
+  access={Library.PatronAccess}
+  actor={@patron_id}
+/>
 ```
+
+The component asks the host where the Journey is, draws the screen, and hands
+the host each submit and back request; the host's engine steps the Journey.
 
 The markup is plain semantic HTML with a `class` and stable `data-riddler-*`
 attributes on every component; the package ships no stylesheet.
