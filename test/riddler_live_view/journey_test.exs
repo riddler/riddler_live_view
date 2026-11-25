@@ -18,6 +18,7 @@ defmodule RiddlerLiveView.JourneyTest do
   alias Phoenix.LiveComponent.CID
   alias Phoenix.LiveView.Socket
   alias Plug.Conn.Query
+  alias Riddler.Journey.Scope
   alias Riddler.Screens.Document
   alias RiddlerLiveView.Journey
 
@@ -266,6 +267,17 @@ defmodule RiddlerLiveView.JourneyTest do
       send(self(), {:access, operation})
       true
     end
+  end
+
+  defmodule PatronAccess.Other do
+    @moduledoc false
+    @behaviour Riddler.Journey.Access
+
+    @impl true
+    defdelegate member?(patron_id, scope), to: PatronAccess
+
+    @impl true
+    defdelegate scopes(patron_id), to: PatronAccess
   end
 
   setup do
@@ -883,6 +895,26 @@ defmodule RiddlerLiveView.JourneyTest do
       assert html(socket) =~ ~s(data-riddler-refused)
       refute html(socket) =~ "<form"
     end
+
+    # Mutation: re-present on a changed journey only - goes red.
+    test "an actor changed after the mount is refused, and a changed host is asked again" do
+      socket = mount_journey()
+      assert_received {:host, :present, "J-1"}
+
+      {:ok, refused} = Journey.update(%{id: "registration", actor: "P-2002"}, socket)
+
+      assert_received {:host, :present, "J-1"}
+      assert html(refused) =~ ~s(data-riddler-refused)
+      refute html(refused) =~ "<form"
+
+      {:ok, _socket} = Journey.update(%{id: "registration", host: RegistrationHost}, socket)
+      refute_received {:host, :present, _journey}
+
+      Process.put({:revoked, "P-1001"}, true)
+      {:ok, moved} = Journey.update(%{id: "registration", access: PatronAccess.Other}, socket)
+      assert_received {:host, :present, "J-1"}
+      assert html(moved) =~ ~s(data-riddler-refused)
+    end
   end
 
   describe "a host outside its contract" do
@@ -961,6 +993,81 @@ defmodule RiddlerLiveView.JourneyTest do
 
       assert log =~ "the access check raised ArgumentError"
       refute log =~ "P-1001"
+    end
+
+    # Mutation: answer true from shaped?/1 for every answer - goes red.
+    test "draws the refusal when present/1 answers a screen of a shape riddler never presents" do
+      {:ok, scope} = Scope.new("patron", "P-1001")
+
+      for answer <- [
+            %{"state" => "screen", "screen" => "oops", "moves" => %{}},
+            %{"state" => "screen", "screen" => 7, "moves" => %{}},
+            %{"state" => "screen", "screen" => %{"key" => "patron_details", "elements" => []}},
+            %{
+              "state" => "screen",
+              "screen" => %{"key" => "k", "elements" => [7]},
+              "moves" => %{}
+            },
+            %{"state" => "elsewhere"}
+          ] do
+        Process.put({:misbehave, :present}, {:answer, {:ok, scope, answer}})
+
+        log =
+          capture_log(fn ->
+            html = mount_journey() |> html()
+            assert html =~ ~s(data-riddler-refused)
+            refute html =~ "<form"
+          end)
+
+        assert log =~ "the host's present/1 answered outside its contract"
+      end
+    end
+
+    # Mutation: answer true from shaped?/1 for every answer - goes red.
+    test "keeps what is drawn when submit/2 answers a screen of a shape riddler never presents" do
+      socket = mount_journey()
+
+      for answer <- [
+            %{"state" => "screen", "screen" => "oops"},
+            %{"state" => "screen", "screen" => 7, "moves" => %{}},
+            %{"state" => "screen", "screen" => %{"key" => "k", "elements" => "x"}, "moves" => %{}}
+          ] do
+        Process.put({:misbehave, :submit}, {:answer, {:ok, answer}})
+
+        log =
+          capture_log(fn ->
+            kept = event(socket, "submit", form("details_submitted", @filled))
+            assert kept.assigns == socket.assigns
+          end)
+
+        assert log =~ "the host's submit/2 answered outside its contract"
+      end
+    end
+
+    # Mutation: skip the render probe in drawable/3 - goes red.
+    test "keeps what is drawn, or refuses, when an answer of riddler's shape does not render" do
+      {:ok, scope} = Scope.new("patron", "P-1001")
+      waiting = %{"state" => "waiting", "reason" => %{"not" => "a string"}}
+      socket = mount_journey()
+
+      for answer <- [{:ok, waiting}, {:error, [%{"code" => %{}, "element_key" => nil}]}] do
+        Process.put({:misbehave, :submit}, {:answer, answer})
+
+        log =
+          capture_log(fn ->
+            kept = event(socket, "submit", form("details_submitted", @filled))
+            assert kept.assigns == socket.assigns
+            assert html(kept) =~ ~s(data-riddler-screen="patron_details")
+          end)
+
+        assert log =~ "the host's submit/2 raised"
+      end
+
+      Process.put({:misbehave, :present}, {:answer, {:ok, scope, waiting}})
+
+      capture_log(fn ->
+        assert mount_journey() |> html() =~ ~s(data-riddler-refused)
+      end)
     end
   end
 end
