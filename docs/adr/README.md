@@ -11,8 +11,8 @@ the number against a freshly fetched remote.
 This repository follows riddler's record practice rather than restating it:
 how a record grows by dated Notes and Amendments, which passage governs, and
 when an entry is a Note or an Amendment are as riddler's
-[`docs/adr/README.md`](https://github.com/riddler/riddler-ex/blob/v0.7.0/docs/adr/README.md)
-says at `v0.7.0`. A bare `ADR-NNNN` cites this repository's own records; a
+[`docs/adr/README.md`](https://github.com/riddler/riddler-ex/blob/v0.8.0/docs/adr/README.md)
+says at `v0.8.0`. A bare `ADR-NNNN` cites this repository's own records; a
 cross-repo citation carries the owning repository's beads prefix, so
 `rd-ADR-0005` is riddler's ADR-0005 and `rlv-ADR-0001` is how another
 repository cites this one's ADR-0001.
