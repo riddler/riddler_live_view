@@ -15,6 +15,11 @@ defmodule RiddlerLiveView.Components do
       `choice_question/1`, `boolean_question/1` and `button/1`.
     * `back/1` draws the Back control where the answer's `"moves"` let the
       visitor go back.
+    * `elements/1` draws every element of a screen, in order, each through
+      the component for its kind, a host's own kinds through the host's
+      components, and an element of a kind it cannot draw not at all; the
+      "Elements of a kind the package does not draw" section says what then
+      happens to the screen's submit.
 
   The markup ships no stylesheet and no CSS framework class. Every component
   carries a `class` attribute, and a host may add its own classes through
@@ -47,6 +52,11 @@ defmodule RiddlerLiveView.Components do
       `"true"` or `"false"` for whether it validates, and its `"style"`
       where it carries one;
     * `data-riddler-back` on the Back control;
+    * `data-riddler-unknown` on the notice `elements/1` draws for a screen
+      with elements it cannot draw, whose value is their kinds that are
+      strings, space-separated, and
+      `data-riddler-blocked` on a button that notice disables, whose value
+      is the notice's `id`;
     * `data-riddler-finding` on each finding drawn, whose value is the
       finding's `"code"`, and `data-riddler-focus` on the frame's focus
       trigger, whose value is the `id` of the finding it moves focus to.
@@ -89,6 +99,30 @@ defmodule RiddlerLiveView.Components do
   names that finding, so focus moves whenever the first finding changes; a
   refusal that leaves the same first finding in place moves it no further.
 
+  ## Elements of a kind the package does not draw
+
+  A screen may carry an element whose `"type"` is not one of the kinds
+  above. A host whose screens carry kinds of its own passes `elements/1` a
+  component map, `components`, that names, for each such type, the host's
+  function component that draws it; that component is called with the
+  element and the screen's `moves`, `findings`, `finding_text` and
+  `blocked_by`. A component map may not name a kind the package draws.
+
+  An element whose kind neither the package nor the component map draws is
+  not drawn, and the visitor may not submit the screen it is on:
+
+    * `elements/1` draws a notice above the screen's elements saying that
+      part of the screen cannot be shown, in the package's own sentence or
+      the text the host passes as `unknown_text`;
+    * every button it draws for the screen is drawn `disabled`, names the
+      notice in its `aria-describedby` and carries `data-riddler-blocked`;
+    * `unknown_kinds/2` answers the kinds of the screen that nothing draws,
+      so a host, or the LiveComponent that embeds these components, refuses
+      a submit of that screen whatever the browser sends: a disabled button
+      is the browser's to honour, not a guarantee.
+
+  The Back control is not a submit and is not disabled.
+
   ## Example
 
   A patron registration's details screen, from the answer riddler gives:
@@ -117,6 +151,10 @@ defmodule RiddlerLiveView.Components do
   }
 
   @finding_fallback "This could not be accepted."
+
+  @element_types ~w(heading text text_question secret_question choice_question boolean_question button)
+
+  @unknown_fallback "Part of this screen cannot be shown here, so it cannot be sent."
 
   @doc """
   Draws a presented screen around its elements.
@@ -744,6 +782,10 @@ defmodule RiddlerLiveView.Components do
   pressed button, and whether it validates, by its outcome. The button's
   `"style"`, a string from the open set riddler leaves to a renderer, is
   carried as `data-riddler-style` and drawn no differently.
+
+  Given `blocked_by`, the `id` of the notice `elements/1` draws for a screen
+  it cannot draw in full, the button is drawn `disabled`, names the notice
+  in its `aria-describedby` and carries `data-riddler-blocked`.
   """
   attr(:element, :map,
     required: true,
@@ -754,6 +796,12 @@ defmodule RiddlerLiveView.Components do
   attr(:moves, :map,
     required: true,
     doc: "The answer's `\"moves\"`: its `\"outcomes\"` and `\"back\"`."
+  )
+
+  attr(:blocked_by, :string,
+    default: nil,
+    doc:
+      "The `id` of a notice saying why the screen cannot be submitted; given one, the button is drawn disabled and names it."
   )
 
   attr(:class, :any, default: nil, doc: "Classes added to the button's own.")
@@ -777,6 +825,9 @@ defmodule RiddlerLiveView.Components do
       name="outcome"
       value={@element["outcome"]}
       formnovalidate={not @validates}
+      disabled={@blocked_by != nil}
+      aria-describedby={@blocked_by}
+      data-riddler-blocked={@blocked_by}
       class={["riddler-button" | List.wrap(@class)]}
       data-riddler-element="button"
       data-riddler-key={@element["key"]}
@@ -847,6 +898,214 @@ defmodule RiddlerLiveView.Components do
       {@label}
     </button>
     """
+  end
+
+  @doc """
+  Draws every element of a screen, in the screen's order.
+
+  Each element of the screen's `"elements"` is drawn by the component for
+  its `"type"`: one of this module's for a kind the package draws, or the
+  host's own for a type the component map, `components`, names. A host's
+  component is called with exactly the assigns `element`, `moves`,
+  `findings`, `finding_text` and `blocked_by`, and draws the element as it
+  chooses; it is called as a function, so the defaults of any `attr` it
+  declares are not applied.
+  `findings` and `finding_text` pass to every question.
+
+  An element of any other kind is not drawn. Where the screen has one, a
+  notice is drawn above the elements, a paragraph with `role="status"`, so
+  a screen reader announces it when a screen arrives, whose text is
+  `unknown_text`, and every button is drawn disabled and names the notice;
+  `unknown_kinds/2` answers the same kinds for the host's submit. The
+  module's "Elements of a kind the package does not draw" section says why.
+
+  The notice's `id` is derived from the screen's `"key"`.
+
+  Raises `ArgumentError` for a component map that names a kind the package
+  draws, or whose value for a type is not a function of one argument: both
+  are a host's wiring, never a visitor's input.
+  """
+  attr(:screen, :map,
+    required: true,
+    doc: "The answer's `\"screen\"`: its `\"key\"` and its `\"elements\"`."
+  )
+
+  attr(:moves, :map,
+    required: true,
+    doc: "The answer's `\"moves\"`: which buttons are drawn."
+  )
+
+  attr(:components, :map,
+    default: %{},
+    doc:
+      "The component map: for each of the host's own element types, the host's function component that draws it."
+  )
+
+  attr(:findings, :list,
+    default: [],
+    doc:
+      "The findings of a refused submit, `Riddler.Finding` structs or their wire form, passed to every question."
+  )
+
+  attr(:finding_text, :map,
+    default: %{},
+    doc:
+      "The text drawn, by finding code, for a finding whose author wrote no message, passed to every question."
+  )
+
+  attr(:unknown_text, :string,
+    default: @unknown_fallback,
+    doc: "The notice's text, drawn where the screen has an element nothing draws."
+  )
+
+  attr(:class, :any, default: nil, doc: "Classes added to the notice's own.")
+
+  @spec elements(map()) :: Phoenix.LiveView.Rendered.t()
+  def elements(assigns) do
+    %{screen: screen, components: components} = assigns
+    unknown = unknown_kinds(screen, components)
+
+    assigns =
+      assign(assigns,
+        items: List.wrap(screen["elements"]),
+        unknown: unknown |> Enum.filter(&is_binary/1) |> Enum.join(" "),
+        notice_id: if(unknown != [], do: "riddler-screen-#{screen["key"]}-unknown"),
+        notice: present_text(assigns.unknown_text) || @unknown_fallback
+      )
+
+    ~H"""
+    <p
+      :if={@notice_id}
+      id={@notice_id}
+      role="status"
+      class={["riddler-unknown" | List.wrap(@class)]}
+      data-riddler-unknown={@unknown}
+    >
+      {@notice}
+    </p>
+    <.element
+      :for={element <- @items}
+      element={element}
+      components={@components}
+      moves={@moves}
+      findings={@findings}
+      finding_text={@finding_text}
+      blocked_by={@notice_id}
+    />
+    """
+  end
+
+  @doc """
+  Answers the kinds of a screen's elements that neither the package nor the
+  component map draws, each once, in the order the screen first carries
+  them; `[]` where every element is drawn.
+
+  A screen with an element of such a kind is not to be submitted: the
+  module's "Elements of a kind the package does not draw" section says why.
+  An element whose `"type"` is not a string is of no kind anything draws;
+  it is answered as `nil`.
+
+  Raises `ArgumentError` for a component map `elements/1` refuses.
+  """
+  @spec unknown_kinds(map(), %{optional(String.t()) => (map() -> term())}) :: [String.t() | nil]
+  def unknown_kinds(screen, components \\ %{}) do
+    check_components!(components)
+
+    screen
+    |> Map.get("elements")
+    |> List.wrap()
+    |> Enum.filter(&(drawer(&1, components) == :none))
+    |> Enum.map(&element_kind/1)
+    |> Enum.uniq()
+  end
+
+  # One element, drawn by the component for its kind; nothing for a kind
+  # nothing draws.
+  attr(:element, :map, required: true)
+  attr(:components, :map, required: true)
+  attr(:moves, :map, required: true)
+  attr(:findings, :list, required: true)
+  attr(:finding_text, :map, required: true)
+  attr(:blocked_by, :string, required: true)
+
+  defp element(assigns) do
+    assigns = assign(assigns, drawer: drawer(assigns.element, assigns.components))
+
+    ~H"""
+    <.heading :if={@drawer == "heading"} element={@element} />
+    <.text :if={@drawer == "text"} element={@element} />
+    <.text_question
+      :if={@drawer == "text_question"}
+      element={@element}
+      findings={@findings}
+      finding_text={@finding_text}
+    />
+    <.secret_question
+      :if={@drawer == "secret_question"}
+      element={@element}
+      findings={@findings}
+      finding_text={@finding_text}
+    />
+    <.choice_question
+      :if={@drawer == "choice_question"}
+      element={@element}
+      findings={@findings}
+      finding_text={@finding_text}
+    />
+    <.boolean_question
+      :if={@drawer == "boolean_question"}
+      element={@element}
+      findings={@findings}
+      finding_text={@finding_text}
+    />
+    <.button :if={@drawer == "button"} element={@element} moves={@moves} blocked_by={@blocked_by} />
+    {if is_function(@drawer), do: host_component(@drawer, assigns)}
+    """
+  end
+
+  defp host_component(fun, assigns) do
+    fun.(%{
+      __changed__: nil,
+      element: assigns.element,
+      moves: assigns.moves,
+      findings: assigns.findings,
+      finding_text: assigns.finding_text,
+      blocked_by: assigns.blocked_by
+    })
+  end
+
+  # What draws an element: the kind's own name for a kind the package draws,
+  # the host's function for a kind the component map names, :none otherwise.
+  defp drawer(element, components) do
+    kind = element_kind(element)
+
+    cond do
+      kind in @element_types -> kind
+      is_binary(kind) and is_map_key(components, kind) -> Map.fetch!(components, kind)
+      true -> :none
+    end
+  end
+
+  defp element_kind(%{"type" => type}) when is_binary(type), do: type
+  defp element_kind(_element), do: nil
+
+  defp check_components!(components) when is_map(components) do
+    Enum.each(components, fn
+      {type, _fun} when type in @element_types ->
+        raise ArgumentError,
+              "the component map names #{inspect(type)}, a kind this package draws"
+
+      {type, fun} when is_binary(type) and is_function(fun, 1) ->
+        :ok
+
+      entry ->
+        raise ArgumentError,
+              "a component map entry is an element type and a function component of one argument, got: #{inspect(entry)}"
+    end)
+  end
+
+  defp check_components!(components) do
+    raise ArgumentError, "the component map is a map, got: #{inspect(components)}"
   end
 
   # The findings a component draws, each as one focusable paragraph.
