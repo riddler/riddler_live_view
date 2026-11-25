@@ -95,7 +95,8 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"elements with a host's own kind", hosted_elements()},
       {"journey on a screen with findings and back", journey(:screen)},
       {"journey waiting", journey(:waiting)},
-      {"journey done", journey(:done)}
+      {"journey done", journey(:done)},
+      {"journey refused", journey(:refused)}
     ]
   end
 
@@ -816,6 +817,9 @@ defmodule RiddlerLiveView.AccessibilityTest do
 
         :done ->
           %{"state" => "done"}
+
+        :refused ->
+          nil
       end
 
     assigns = %{
@@ -834,6 +838,8 @@ defmodule RiddlerLiveView.AccessibilityTest do
       unknown_text: nil,
       waiting_text: "One moment.",
       done_text: "All done.",
+      refused: state == :refused,
+      refused_text: "There is nothing to show here.",
       myself: %Phoenix.LiveComponent.CID{cid: 1}
     }
 

@@ -129,7 +129,10 @@ defmodule RiddlerLiveView.JourneyTest do
     def start(_path, _scope), do: {:error, :no_such_journey}
 
     @impl true
-    def present(journey) do
+    def present(journey),
+      do: misbehave(:present, journey, fn -> keep_present(journey) end)
+
+    defp keep_present(journey) do
       send(self(), {:host, :present, journey})
 
       case Process.get({:journey, journey}) do
@@ -139,7 +142,10 @@ defmodule RiddlerLiveView.JourneyTest do
     end
 
     @impl true
-    def submit(journey, submit) do
+    def submit(journey, submit),
+      do: misbehave(:submit, submit, fn -> keep_submit(journey, submit) end)
+
+    defp keep_submit(journey, submit) do
       send(self(), {:host, :submit, journey, submit})
 
       with %{} = engine <- Process.get({:journey, journey}) || {:error, :no_such_journey},
@@ -156,7 +162,10 @@ defmodule RiddlerLiveView.JourneyTest do
     end
 
     @impl true
-    def back(journey, request) do
+    def back(journey, request),
+      do: misbehave(:back, request, fn -> keep_back(journey, request) end)
+
+    defp keep_back(journey, request) do
       send(self(), {:host, :back, journey, request})
 
       case Process.get({:journey, journey}) do
@@ -167,6 +176,19 @@ defmodule RiddlerLiveView.JourneyTest do
           engine = %{engine | status: {:screen, "patron_details"}}
           Process.put({:journey, journey}, engine)
           {:ok, answer(engine)}
+      end
+    end
+
+    # A test sets {:misbehave, callback} to make the host answer outside its
+    # contract; the raise carries what the host was handed, as a careless
+    # host's match error would.
+    defp misbehave(callback, handed, fun) do
+      case Process.get({:misbehave, callback}) do
+        nil -> fun.()
+        :raise -> raise ArgumentError, "the host was handed #{inspect(handed)}"
+        :throw -> throw(handed)
+        :exit -> exit(handed)
+        {:answer, answer} -> answer
       end
     end
 
@@ -214,6 +236,38 @@ defmodule RiddlerLiveView.JourneyTest do
     end
   end
 
+  defmodule PatronAccess do
+    @moduledoc false
+    @behaviour Riddler.Journey.Access
+
+    alias Riddler.Journey.Scope
+
+    # A patron belongs to their own registration's scope until the test
+    # revokes the membership with {:revoked, patron_id}.
+    @impl true
+    def member?(patron_id, %Scope{kind: "patron", id: id}) do
+      if Process.get({:misbehave, :access}) == :raise,
+        do: raise(ArgumentError, "the access module was asked about #{inspect(patron_id)}")
+
+      patron_id == id and not Process.get({:revoked, patron_id}, false)
+    end
+
+    def member?(_patron_id, _scope), do: false
+
+    @impl true
+    def scopes(patron_id) do
+      {:ok, scope} = Scope.new("patron", patron_id)
+      [scope]
+    end
+
+    # Reports each operation asked, so a test can say which was asked.
+    @impl true
+    def allowed?(_patron_id, _scope, operation) do
+      send(self(), {:access, operation})
+      true
+    end
+  end
+
   setup do
     document = Document.admit(@document)
     put_engine("J-1", %{document: document, status: {:screen, "patron_details"}, root: %{}})
@@ -231,7 +285,16 @@ defmodule RiddlerLiveView.JourneyTest do
     {:ok, socket} = Journey.mount(socket)
 
     assigns =
-      Map.merge(%{id: "registration", journey: "J-1", host: RegistrationHost}, assigns)
+      Map.merge(
+        %{
+          id: "registration",
+          journey: "J-1",
+          host: RegistrationHost,
+          access: PatronAccess,
+          actor: "P-1001"
+        },
+        assigns
+      )
 
     {:ok, socket} = Journey.update(assigns, socket)
     socket
@@ -710,6 +773,194 @@ defmodule RiddlerLiveView.JourneyTest do
       assert html =~ ~s(data-riddler-done)
       assert html =~ "Your card is ready."
       refute html =~ "EXAMPLE-CARD-0001"
+    end
+  end
+
+  describe "the access check" do
+    # Mutation: draw the visitor's refusal for a missing access module - goes red.
+    test "raises ArgumentError at mount without an access module, and draws no refusal" do
+      socket = %Socket{assigns: %{__changed__: %{}, myself: %CID{cid: 1}}, transport_pid: self()}
+      {:ok, socket} = Journey.mount(socket)
+      base = %{id: "registration", journey: "J-1", host: RegistrationHost, actor: "P-1001"}
+
+      for access <- [nil, RegistrationHost, "PatronAccess", Library.NoSuchAccess] do
+        assigns = if access, do: Map.put(base, :access, access), else: base
+
+        assert_raise ArgumentError, ~r/:access/, fn -> Journey.update(assigns, socket) end
+      end
+
+      refute_received {:host, :present, _journey}
+    end
+
+    # Mutation: answer :ok for :present without asking - goes red.
+    test "asks with :present on mount and draws the refusal for an actor not a member" do
+      socket = mount_journey()
+      assert_received {:access, :present}
+      assert html(socket) =~ ~s(data-riddler-screen="patron_details")
+
+      socket = mount_journey(%{actor: "P-2002"})
+      html = html(socket)
+
+      assert html =~ ~s(data-riddler-refused)
+      assert html =~ "There is nothing to show here."
+      refute html =~ "<form"
+      refute html =~ "data-riddler-state"
+      refute html =~ "Get your library card"
+      assert socket.assigns.answer == nil
+    end
+
+    # Mutation: draw a refusal that says whether the Journey exists - goes red.
+    test "draws one refusal alike for a Journey the host does not have and one not the actor's" do
+      unknown = mount_journey(%{journey: "J-404"}) |> html()
+      forbidden = mount_journey(%{actor: "P-2002"}) |> html()
+
+      assert unknown =~ ~s(data-riddler-refused)
+      assert unknown == forbidden
+
+      held = mount_journey(%{journey: "J-404", refused_text: "Not here."}) |> html()
+      assert held =~ "Not here."
+    end
+
+    # Mutation: check access at mount only - goes red.
+    test "refuses a submit once the membership is revoked after the mount" do
+      socket = mount_journey()
+      assert_received {:access, :present}
+      Process.put({:revoked, "P-1001"}, true)
+
+      refused =
+        event(
+          socket,
+          "submit",
+          form(
+            "details_submitted",
+            Map.put(@filled, "riddler-password", %{"card_pin" => @sentinel})
+          )
+        )
+
+      refute_received {:host, :submit, _journey, _submit}
+      assert html(refused) =~ ~s(data-riddler-refused)
+      refute html(refused) =~ "<form"
+      refute inspect(refused.assigns, limit: :infinity, printable_limit: :infinity) =~ @sentinel
+
+      again = event(refused, "submit", form("details_submitted", @filled))
+      refute_received {:host, :submit, _journey, _submit}
+      assert again.assigns == refused.assigns
+    end
+
+    # Mutation: check access at mount only - goes red.
+    test "refuses a back request once the membership is revoked after the mount" do
+      socket = mount_journey() |> event("submit", form("details_submitted", @filled))
+      assert_received {:host, :submit, "J-1", _submit}
+      Process.put({:revoked, "P-1001"}, true)
+
+      refused = event(socket, "back", %{"screen" => "card_pickup", "back" => true})
+
+      refute_received {:host, :back, _journey, _request}
+      assert html(refused) =~ ~s(data-riddler-refused)
+      refute html(refused) =~ "<form"
+    end
+
+    # Mutation: ask the access check with :present for every operation - goes red.
+    test "asks with :submit before every submit and :back before every back" do
+      socket = mount_journey()
+      assert_received {:access, :present}
+
+      socket = event(socket, "submit", form("details_submitted", @filled))
+      assert_received {:access, :submit}
+      refute_received {:access, :present}
+
+      event(socket, "back", %{"screen" => "card_pickup", "back" => true})
+      assert_received {:access, :back}
+    end
+
+    # Mutation: skip the access check while an answer is drawn - goes red.
+    test "asks again on a refresh, and refuses once the membership is revoked" do
+      socket = mount_journey()
+      Process.put({:revoked, "P-1001"}, true)
+
+      {:ok, socket} = Journey.update(%{id: "registration", refresh: true}, socket)
+
+      assert html(socket) =~ ~s(data-riddler-refused)
+      refute html(socket) =~ "<form"
+    end
+  end
+
+  describe "a host outside its contract" do
+    # Mutation: log the exception's message - goes red.
+    test "keeps what is drawn when submit/2 raises, throws or exits, and logs no parameter" do
+      socket = mount_journey()
+      fields = Map.put(@filled, "riddler-password", %{"card_pin" => @sentinel})
+
+      for how <- [:raise, :throw, :exit] do
+        Process.put({:misbehave, :submit}, how)
+
+        log =
+          capture_log(fn ->
+            kept = event(socket, "submit", form("details_submitted", fields))
+            assert kept.assigns == socket.assigns
+          end)
+
+        assert log =~ "RiddlerLiveView.Journey: the host's submit/2"
+        refute log =~ @sentinel
+        refute log =~ "4321"
+      end
+    end
+
+    # Mutation: draw the refusal on an answer outside the contract - goes red.
+    test "keeps what is drawn when submit/2 or back/2 answers outside the contract" do
+      socket = mount_journey()
+
+      for answer <- [{:error, :timeout}, :ok, {:ok, "screen"}, {:error, [:not_a_finding]}] do
+        Process.put({:misbehave, :submit}, {:answer, answer})
+
+        log =
+          capture_log(fn ->
+            kept = event(socket, "submit", form("details_submitted", @filled))
+            assert kept.assigns == socket.assigns
+          end)
+
+        assert log =~ "the host's submit/2 answered outside its contract"
+      end
+
+      Process.delete({:misbehave, :submit})
+      socket = event(socket, "submit", form("details_submitted", @filled))
+      Process.put({:misbehave, :back}, {:answer, {:error, :timeout}})
+
+      capture_log(fn ->
+        kept = event(socket, "back", %{"screen" => "card_pickup", "back" => true})
+        assert kept.assigns == socket.assigns
+      end)
+    end
+
+    # Mutation: keep what is drawn on a present/1 outside the contract - goes red.
+    test "draws the refusal when present/1 raises or answers outside the contract" do
+      for misbehave <- [:raise, :exit, {:answer, {:error, :timeout}}, {:answer, {:ok, "screen"}}] do
+        Process.put({:misbehave, :present}, misbehave)
+
+        capture_log(fn ->
+          html = mount_journey() |> html()
+          assert html =~ ~s(data-riddler-refused)
+          refute html =~ "<form"
+        end)
+      end
+    end
+
+    # Mutation: answer :ok when the access check raises - goes red.
+    test "draws the refusal when the access module raises, on mount and on a submit" do
+      socket = mount_journey()
+      Process.put({:misbehave, :access}, :raise)
+
+      log =
+        capture_log(fn ->
+          refused = event(socket, "submit", form("details_submitted", @filled))
+          refute_received {:host, :submit, _journey, _submit}
+          assert html(refused) =~ ~s(data-riddler-refused)
+
+          assert mount_journey() |> html() =~ ~s(data-riddler-refused)
+        end)
+
+      assert log =~ "the access check raised ArgumentError"
+      refute log =~ "P-1001"
     end
   end
 end
