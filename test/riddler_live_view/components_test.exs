@@ -731,4 +731,199 @@ defmodule RiddlerLiveView.ComponentsTest do
                ~s(class="riddler-boolean-question consent")
     end
   end
+
+  describe "button/1" do
+    @continue %{
+      "type" => "button",
+      "key" => "details_continue",
+      "label" => "Continue",
+      "outcome" => "details_submitted",
+      "style" => "primary"
+    }
+    @go_back %{
+      "type" => "button",
+      "key" => "details_back",
+      "label" => "Change card type",
+      "outcome" => "card_type_changed",
+      "validates" => false
+    }
+    @moves %{"outcomes" => ["details_submitted", "card_type_changed"], "back" => false}
+
+    defp button_html(element, moves \\ @moves, class \\ nil) do
+      assigns = %{element: element, moves: moves, class: class}
+
+      rendered_to_string(
+        ~H"<Components.button element={@element} moves={@moves} class={@class} />"
+      )
+    end
+
+    # Mutation: name the button "action" instead of "outcome" - goes red.
+    test "renders a submit button whose name and value carry the outcome" do
+      html = button_html(@continue)
+
+      assert html =~ ~r{^<button [^>]*>\s*Continue\s*</button>$}
+      assert [_, attrs] = Regex.run(~r{<button([^>]*)>}, html)
+      assert attrs =~ ~s( type="submit")
+      assert attrs =~ ~s( name="outcome")
+      assert attrs =~ ~s( value="details_submitted")
+      assert attrs =~ ~s( class="riddler-button")
+      assert attrs =~ ~s( data-riddler-element="button")
+      assert attrs =~ ~s( data-riddler-key="details_continue")
+      assert attrs =~ ~s( data-riddler-outcome="details_submitted")
+    end
+
+    # Mutation: draw the button whatever the moves list - goes red.
+    test "draws a button only where the moves list its outcome" do
+      for moves <- [
+            %{"outcomes" => ["card_type_changed"], "back" => false},
+            %{"outcomes" => [], "back" => true},
+            %{"back" => false}
+          ] do
+        assert button_html(@continue, moves) == ""
+      end
+
+      assert button_html(Map.delete(@continue, "outcome")) == ""
+    end
+
+    # Mutation: drop formnovalidate from the button - goes red.
+    test "a button that does not validate carries formnovalidate and says so" do
+      assert [_, attrs] = Regex.run(~r{<button([^>]*)>}, button_html(@go_back))
+      assert attrs =~ ~r/\sformnovalidate(?=\s|\z)/
+      assert attrs =~ ~s( data-riddler-validates="false")
+    end
+
+    # Mutation: validate only where the button says validates true - goes red.
+    test "a button that validates, by default or by saying so, carries no formnovalidate" do
+      for element <- [@continue, Map.put(@continue, "validates", true)] do
+        html = button_html(element)
+        refute html =~ "formnovalidate"
+        assert html =~ ~s( data-riddler-validates="true")
+      end
+    end
+
+    # Mutation: render the style as a class - goes red.
+    test "carries the style as a data attribute and nothing else" do
+      html = button_html(@continue)
+      assert html =~ ~s( data-riddler-style="primary")
+      assert html =~ ~s( class="riddler-button")
+      refute button_html(@go_back) =~ "data-riddler-style"
+      refute button_html(Map.put(@continue, "style", 3)) =~ "data-riddler-style"
+    end
+
+    # Mutation: render the label with raw/1 - goes red.
+    test "escapes the label" do
+      html = button_html(%{@continue | "label" => "<b>Continue</b>"})
+      refute html =~ "<b>"
+      assert html =~ "&lt;b&gt;Continue&lt;/b&gt;"
+    end
+
+    # Mutation: drop @class from the button's class list - goes red.
+    test "adds a host's classes to its own" do
+      assert button_html(@continue, @moves, "primary-action") =~
+               ~s(class="riddler-button primary-action")
+    end
+  end
+
+  describe "back/1" do
+    @details_screen %{"key" => "patron_details", "title" => "Your details", "elements" => []}
+
+    defp back_html(moves, attrs \\ %{}) do
+      assigns =
+        Map.merge(
+          %{
+            screen: @details_screen,
+            moves: moves,
+            label: "Back",
+            event: "back",
+            target: nil,
+            class: nil
+          },
+          attrs
+        )
+
+      rendered_to_string(~H"""
+      <Components.back
+        screen={@screen}
+        moves={@moves}
+        label={@label}
+        event={@event}
+        target={@target}
+        class={@class}
+      />
+      """)
+    end
+
+    defp pushed(html) do
+      [_, json] = Regex.run(~r{phx-click="([^"]*)"}, html)
+
+      json
+      |> String.replace("&quot;", "\"")
+      |> String.replace("&amp;", "&")
+      |> Jason.decode!()
+    end
+
+    # Mutation: draw Back whatever the moves say - goes red.
+    test "draws Back only where the moves say back is true" do
+      for back <- [false, nil, "true"] do
+        assert back_html(%{"outcomes" => [], "back" => back}) == ""
+      end
+
+      assert back_html(%{"outcomes" => []}) == ""
+      assert back_html(%{"outcomes" => [], "back" => true}) =~ "Back"
+    end
+
+    # Mutation: make Back a submit button - goes red.
+    test "renders a button that submits no form" do
+      html = back_html(%{"outcomes" => [], "back" => true})
+
+      assert html =~ ~r{^<button [^>]*>\s*Back\s*</button>$}
+      assert [_, attrs] = Regex.run(~r{<button([^>]*)>}, html)
+      assert attrs =~ ~s( type="button")
+      assert attrs =~ ~s( class="riddler-back")
+      assert attrs =~ ~r/\sdata-riddler-back(?=\s|\z)/
+      refute attrs =~ "name="
+      refute attrs =~ "data-riddler-element"
+    end
+
+    # Mutation: push "back" as the string "true" - goes red.
+    test "pushes riddler's back request, which riddler decodes as one" do
+      html = back_html(%{"outcomes" => ["details_submitted"], "back" => true})
+
+      assert [["push", %{"event" => "back", "value" => value} = push]] = pushed(html)
+      refute Map.has_key?(push, "target")
+      assert value == %{"screen" => "patron_details", "back" => true}
+
+      # LiveView adds the button's own empty value to the params.
+      assert Riddler.Journey.decode_submit(Map.put(value, "value", "")) ==
+               {:ok, %{"screen" => "patron_details", "back" => true}}
+    end
+
+    # Mutation: ignore @event and @target and always push "back" to the LiveView - goes red.
+    test "pushes the event a host names to the target it names" do
+      html =
+        back_html(%{"outcomes" => [], "back" => true}, %{
+          event: "journey_back",
+          target: "#journey"
+        })
+
+      assert [["push", %{"event" => "journey_back", "target" => "#journey"}]] = pushed(html)
+
+      myself = %Phoenix.LiveComponent.CID{cid: 3}
+      html = back_html(%{"outcomes" => [], "back" => true}, %{target: myself})
+      assert [["push", %{"event" => "back", "target" => 3}]] = pushed(html)
+    end
+
+    # Mutation: ignore @label - goes red.
+    test "draws the label a host passes, escaped" do
+      html = back_html(%{"outcomes" => [], "back" => true}, %{label: "<i>Previous</i>"})
+      assert html =~ "&lt;i&gt;Previous&lt;/i&gt;"
+      refute html =~ "<i>"
+    end
+
+    # Mutation: drop @class from the control's class list - goes red.
+    test "adds a host's classes to its own" do
+      assert back_html(%{"outcomes" => [], "back" => true}, %{class: "secondary"}) =~
+               ~s(class="riddler-back secondary")
+    end
+  end
 end
