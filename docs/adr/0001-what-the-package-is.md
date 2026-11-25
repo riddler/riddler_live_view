@@ -45,9 +45,12 @@ records use the word. A piece of markup is called a tag.
 `"screen"`, `"waiting"` or `"done"`, and for a screen, the resolved screen
 of elements and the moves the visitor has (rd-ADR-0005, Decision 3 and its
 Amendments of 2026-11-18 and 2026-11-24). That answer is data: riddler
-renders nothing, stores nothing and steps no Journey (rd-ADR-0005, Decision 6, "What this
-package does not own"). Something has to turn the answer into markup a
-visitor can read and fill in, and send back what they submit.
+renders nothing, stores nothing and steps no Journey (rd-ADR-0005,
+Decision 6, "What this package does not own", for storage and the stepper;
+its Amendment of 2026-11-24, "What is unchanged": "Decision 6 stands: this
+package renders, stores and transports nothing"). Something has to turn
+the answer into markup a visitor can read and fill in, and send back what
+they submit.
 
 **A host that renders it in LiveView writes the same markup every time.**
 Every host that presents a patron registration in Phoenix LiveView writes
@@ -73,11 +76,11 @@ finding `element_key`", answers a presented screen's children under
 either schema version, and a finding's `"element_key"` where it answered
 `"node_key"`; its companion, rd-ADR-0002's Amendment of the same date, "the
 children of a screen are `elements`, as `schema_version` 2", decides the
-document. From that Amendment on, wherever riddler's records say node of a
-child of a screen, they read element (rd-ADR-0005's Amendment of
-2026-11-24, "Which sentences this supersedes"). The Amendment leaves to a
-renderer "How a renderer draws an element, and the attributes it marks one
-with"; this record decides both.
+document. From those Amendments on, wherever rd-ADR-0005 and rd-ADR-0002
+say node of a child of a screen, they read element (each one's Amendment
+of 2026-11-24, "Which sentences this supersedes"). rd-ADR-0005's
+Amendment leaves to a renderer "How a renderer draws an element, and the
+attributes it marks one with"; this record decides both.
 
 **The repository is a scaffold.** `lib/riddler_live_view.ex` at `6c2f36b`
 holds a moduledoc and nothing else, and `mix.exs` at `6c2f36b` lists two
