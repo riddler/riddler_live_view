@@ -38,7 +38,7 @@ defmodule RiddlerLiveView.SecretNoEchoTest do
     end
 
     @impl true
-    def handle_event("submit", %{"card_pin" => typed}, socket) do
+    def handle_event("submit", %{"riddler-password" => %{"card_pin" => typed}}, socket) do
       send(socket.assigns.host, {:sealed, %{"card_pin" => %{"sealed" => seal(typed)}}})
       {:noreply, assign(socket, element: Map.put(socket.assigns.element, "held", true))}
     end
@@ -64,7 +64,8 @@ defmodule RiddlerLiveView.SecretNoEchoTest do
   defp html(socket), do: rendered_to_string(RegistrationLive.render(socket.assigns))
 
   defp submit(socket, typed) do
-    {:noreply, socket} = RegistrationLive.handle_event("submit", %{"card_pin" => typed}, socket)
+    params = %{"riddler-password" => %{"card_pin" => typed}}
+    {:noreply, socket} = RegistrationLive.handle_event("submit", params, socket)
     socket
   end
 

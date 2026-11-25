@@ -12,8 +12,7 @@ defmodule RiddlerLiveView do
   start an execution, store a response or decide who may see a Journey: those
   stay the host's.
 
-  `RiddlerLiveView.Components` holds the screen's frame and the components
-  for the `heading` and `text` elements. The LiveComponent and the
-  components for the other element kinds are still to come.
+  `RiddlerLiveView.Components` holds the screen's frame and a component for
+  each element kind, and `RiddlerLiveView.Journey` is the LiveComponent.
   """
 end
