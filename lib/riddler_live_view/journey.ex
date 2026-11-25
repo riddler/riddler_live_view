@@ -26,16 +26,18 @@ defmodule RiddlerLiveView.Journey do
       component passes to the host and never reads.
     * `host` - required, the host's module implementing
       `Riddler.Journey.Host`.
-    * `access` - the host's module implementing `Riddler.Journey.Access`,
-      and `actor`, who is asking, the host's own value. This version holds
-      both and asks no access check yet: until it does, the host decides
-      who may see a Journey before it embeds the component.
+    * `access` - required, the host's module implementing
+      `Riddler.Journey.Access`.
+    * `actor` - who is asking, the host's own value, which the component
+      hands to the access check and never reads.
     * `components` - the component map `RiddlerLiveView.Components.elements/1`
       takes, for the host's own element kinds.
     * `finding_text` and `unknown_text` - passed to the components, as
       `RiddlerLiveView.Components` describes them.
     * `waiting_text` and `done_text` - the sentence drawn while the
       execution waits and once it is done.
+    * `refused_text` - the sentence drawn in place of a Journey the visitor
+      may not see.
     * `id_prefix` - the prefix of every `id` the markup derives, in place of
       `id`.
     * `class` - classes added to the component's own.
@@ -62,9 +64,44 @@ defmodule RiddlerLiveView.Journey do
       drawn.
 
   The component's root carries `data-riddler-journey`, and
-  `data-riddler-state` with the answer's `"state"`. A host callback that
-  answers `{:error, :no_such_journey}` leaves nothing of the Journey drawn,
-  and no submit or back reaches the host after it.
+  `data-riddler-state` with the answer's `"state"`.
+
+  ## Who may see the Journey
+
+  The component asks `Riddler.Journey.Access.check/4` of the host's access
+  module, with the `actor` and the scope the host's `present/1` answered,
+  each time before it shows or steps the Journey:
+
+    * with `:present`, after `present/1` answers and before anything of the
+      answer is drawn: on mount, on a refresh and on each retry of a
+      waiting answer;
+    * with `:submit`, before every call of the host's `submit/2`;
+    * with `:back`, before every call of the host's `back/2`.
+
+  It asks every time rather than once because whether an actor belongs to
+  a scope is the host's, and can change while the Journey is open: a
+  membership the host revokes after the mount refuses the next submit.
+
+  A refused check draws one refusal, a paragraph carrying
+  `data-riddler-refused` with the `refused_text`, and nothing of the
+  Journey, and no submit or back reaches the host after it. A host callback
+  that answers `{:error, :no_such_journey}` draws the same refusal, so the
+  markup does not say whether the Journey exists or is not the visitor's.
+
+  A component given no `access`, or an `access` that is not a loaded module
+  exporting `member?/2`, raises `ArgumentError` when it mounts: that is the
+  host's wiring, never a visitor's input, and no refusal is drawn for it.
+
+  ## A host that answers outside its contract
+
+  A host callback, or the access module's callbacks, that raise, throw or
+  exit, or a host callback whose answer is not one `Riddler.Journey.Host`
+  names, do not crash the LiveView. On `present/1` and on the access check
+  the component draws the refusal; on `submit/2` and `back/2` it keeps what
+  is drawn. Either way it logs one error line naming the callback and the
+  kind of failure, the exception's module or `throw` or `exit`, and never
+  the exception's message, the answer or the event's parameters, any of
+  which may carry what the visitor typed.
 
   ## A submit
 
@@ -114,7 +151,8 @@ defmodule RiddlerLiveView.Journey do
   Journey's scope, the findings of the last refusal and a count of
   refusals: nothing a visitor typed. What a submit carries is handed to the
   host and not kept, so a secret question's value is in no assign after the
-  submit and in no markup. The component logs nothing, and the secret
+  submit and in no markup. The component logs nothing but the line a
+  callback outside its contract earns, and the secret
   question's input is named under `"riddler-password"`, which Phoenix's
   default `:filter_parameters` filters out of the line LiveView logs for
   each event; a host that changes that setting keeps a filter that
@@ -123,8 +161,11 @@ defmodule RiddlerLiveView.Journey do
 
   use Phoenix.LiveComponent
 
+  require Logger
+
   alias Phoenix.LiveView.Socket
   alias Riddler.Journey
+  alias Riddler.Journey.Access
   alias RiddlerLiveView.Components
 
   @options [
@@ -138,6 +179,7 @@ defmodule RiddlerLiveView.Journey do
     :unknown_text,
     :waiting_text,
     :done_text,
+    :refused_text,
     :id_prefix,
     :class
   ]
@@ -150,6 +192,7 @@ defmodule RiddlerLiveView.Journey do
     unknown_text: nil,
     waiting_text: "One moment.",
     done_text: "All done.",
+    refused_text: "There is nothing to show here.",
     id_prefix: nil,
     class: nil
   }
@@ -159,7 +202,15 @@ defmodule RiddlerLiveView.Journey do
   @impl true
   @spec mount(Socket.t()) :: {:ok, Socket.t()}
   def mount(socket) do
-    {:ok, assign(socket, answer: nil, scope: nil, findings: [], refusals: 0, retry: nil)}
+    {:ok,
+     assign(socket,
+       answer: nil,
+       scope: nil,
+       refused: false,
+       findings: [],
+       refusals: 0,
+       retry: nil
+     )}
   end
 
   @impl true
@@ -173,7 +224,7 @@ defmodule RiddlerLiveView.Journey do
       |> assign(if first, do: @defaults, else: %{})
       |> assign(Map.take(assigns, @options))
 
-    if first, do: check_wiring!(socket.assigns)
+    check_wiring!(socket.assigns)
 
     if first or changed or Map.get(assigns, :refresh) == true,
       do: {:ok, present(socket)},
@@ -193,10 +244,14 @@ defmodule RiddlerLiveView.Journey do
            "responses" => responses(screen, socket.assigns.components, params)
          },
          {:ok, submit} <- Journey.decode_submit(submit),
-         :ok <- authorize(socket, :submit) do
-      socket.assigns.host.submit(socket.assigns.journey, submit)
-      |> step(socket)
+         {:access, :ok} <- {:access, authorize(socket, :submit)} do
+      %{host: host, journey: journey} = socket.assigns
+
+      "the host's submit/2"
+      |> guarded(fn -> host.submit(journey, submit) end)
+      |> step("the host's submit/2", socket)
     else
+      {:access, :refused} -> {:noreply, refuse(socket)}
       _refused -> {:noreply, socket}
     end
   end
@@ -206,10 +261,14 @@ defmodule RiddlerLiveView.Journey do
          {:ok, %{"back" => true} = request} <- Journey.decode_submit(params),
          :ok <- same_screen(request["screen"], screen),
          true <- moves["back"] == true,
-         :ok <- authorize(socket, :back) do
-      socket.assigns.host.back(socket.assigns.journey, request)
-      |> step(socket)
+         {:access, :ok} <- {:access, authorize(socket, :back)} do
+      %{host: host, journey: journey} = socket.assigns
+
+      "the host's back/2"
+      |> guarded(fn -> host.back(journey, request) end)
+      |> step("the host's back/2", socket)
     else
+      {:access, :refused} -> {:noreply, refuse(socket)}
       _refused -> {:noreply, socket}
     end
   end
@@ -267,52 +326,119 @@ defmodule RiddlerLiveView.Journey do
         {@waiting_text}
       </p>
       <p :if={@state == "done"} class="riddler-done" data-riddler-done>{@done_text}</p>
+      <p :if={@refused} class="riddler-refused" data-riddler-refused>{@refused_text}</p>
     </div>
     """
   end
 
-  # A host that leaves out the Journey or its host module has wired the
-  # component wrongly; no visitor's input reaches this.
+  # A host that leaves out the Journey, its host module or its access module
+  # has wired the component wrongly; no visitor's input reaches this, so it
+  # raises rather than drawing the visitor's refusal.
   defp check_wiring!(assigns) do
     for key <- [:journey, :host], is_nil(assigns[key]) do
       raise ArgumentError, "RiddlerLiveView.Journey needs the #{inspect(key)} assign"
     end
 
+    if not access_module?(assigns[:access]) do
+      raise ArgumentError,
+            "RiddlerLiveView.Journey needs the :access assign, " <>
+              "a module implementing Riddler.Journey.Access"
+    end
+
     :ok
   end
 
-  # Asks the host where the Journey is, and draws the answer.
+  defp access_module?(access) when is_atom(access) and not is_nil(access),
+    do: Code.ensure_loaded?(access) and function_exported?(access, :member?, 2)
+
+  defp access_module?(_access), do: false
+
+  # Asks the host where the Journey is, asks the access module whether the
+  # actor may see it, and draws the answer or the refusal.
   defp present(socket) do
     %{host: host, journey: journey} = socket.assigns
 
-    with {:ok, scope, answer} <- host.present(journey),
-         socket = assign(socket, scope: scope),
-         :ok <- authorize(socket, :present) do
-      show(socket, answer)
-    else
-      {:error, :no_such_journey} -> refuse(socket)
+    case guarded("the host's present/1", fn -> host.present(journey) end) do
+      {:ok, scope, answer} when is_map(answer) ->
+        socket = assign(socket, scope: scope)
+
+        case authorize(socket, :present) do
+          :ok -> show(socket, answer)
+          :refused -> refuse(socket)
+        end
+
+      {:error, :no_such_journey} ->
+        refuse(socket)
+
+      answer ->
+        outside("the host's present/1", answer)
+        refuse(socket)
     end
   end
 
-  # The access check's place, asked before each host callback that shows
-  # or steps the Journey: `:present` when the answer is fetched, `:submit`
-  # before `submit/2` and `:back` before `back/2`. It asks nothing yet and
-  # answers `:ok`.
-  defp authorize(_socket, _operation), do: :ok
+  # The access check, asked before each host callback that shows or steps
+  # the Journey: `:present` when the answer is fetched, `:submit` before
+  # `submit/2` and `:back` before `back/2`. Anything but `:ok` refuses.
+  defp authorize(socket, operation) do
+    %{access: access, actor: actor, scope: scope} = socket.assigns
 
-  defp step({:ok, answer}, socket), do: {:noreply, show(socket, answer)}
+    case guarded("the access check", fn -> Access.check(access, actor, scope, operation) end) do
+      :ok -> :ok
+      _refused -> :refused
+    end
+  end
 
-  defp step({:error, :no_such_journey}, socket), do: {:noreply, refuse(socket)}
+  defp step({:ok, answer}, _callback, socket) when is_map(answer),
+    do: {:noreply, show(socket, answer)}
 
-  defp step({:error, findings}, socket) when is_list(findings) do
-    {:noreply, assign(socket, findings: findings, refusals: socket.assigns.refusals + 1)}
+  defp step({:error, :no_such_journey}, _callback, socket), do: {:noreply, refuse(socket)}
+
+  defp step({:error, findings} = answer, callback, socket) when is_list(findings) do
+    if Enum.all?(findings, &is_map/1) do
+      {:noreply, assign(socket, findings: findings, refusals: socket.assigns.refusals + 1)}
+    else
+      outside(callback, answer)
+      {:noreply, socket}
+    end
+  end
+
+  # An answer outside the host's contract keeps what is drawn.
+  defp step(answer, callback, socket) do
+    outside(callback, answer)
+    {:noreply, socket}
+  end
+
+  # Calls a host's callback so that a raise, a throw or an exit does not
+  # crash the LiveView, whose crash report would carry the event's
+  # parameters. The one log line names the callback and the kind of failure,
+  # never the exception's message, which may carry what the host was handed.
+  defp guarded(callback, fun) do
+    fun.()
+  rescue
+    exception -> failed(callback, "raised #{inspect(exception.__struct__)}")
+  catch
+    :throw, _value -> failed(callback, "threw")
+    :exit, _reason -> failed(callback, "exited")
+  end
+
+  defp failed(callback, how) do
+    Logger.error("RiddlerLiveView.Journey: #{callback} #{how}")
+    {:outside, callback}
+  end
+
+  # A failure `guarded/2` already logged is not logged twice.
+  defp outside(_callback, {:outside, _logged}), do: :ok
+
+  defp outside(callback, _answer) do
+    Logger.error("RiddlerLiveView.Journey: #{callback} answered outside its contract")
   end
 
   defp show(socket, answer) do
-    assign(socket, answer: answer, findings: [], retry: retry(socket, answer))
+    assign(socket, answer: answer, refused: false, findings: [], retry: retry(socket, answer))
   end
 
-  defp refuse(socket), do: assign(socket, answer: nil, findings: [], retry: retry(socket, nil))
+  defp refuse(socket),
+    do: assign(socket, answer: nil, refused: true, findings: [], retry: retry(socket, nil))
 
   # One timer at a time: whatever answer is drawn next, a pending retry is
   # cancelled first, and a new one is set only for a waiting answer that
