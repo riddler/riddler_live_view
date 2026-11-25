@@ -19,4 +19,6 @@ repository cites this one's ADR-0001.
 
 A dated provenance line in these records reads "Noted YYYY-MM-DD", or
 "ruled by the operator, YYYY-MM-DD", or restates the reason (`CLAUDE.md`,
-"Conventions").
+"Conventions"), or, for a decision taken under a standing consent of the
+maintainer's, "decided by the conductor under a standing consent,
+YYYY-MM-DD".
