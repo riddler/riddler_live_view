@@ -41,7 +41,29 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"secret question, held", secret_question(%{"held" => true})},
       {"secret question, required, held, with help",
        secret_question(%{"held" => true, "required" => true, "help" => "Four digits."})},
-      {"frame around a text question and a secret question", questions()}
+      {"frame around a text question and a secret question", questions()},
+      {"choice question, one", choice_question(%{})},
+      {"choice question, one, required, with help and a value",
+       choice_question(%{
+         "required" => true,
+         "help" => "Change it at the desk.",
+         "value" => "child"
+       })},
+      {"choice question, one, dropdown",
+       choice_question(%{"style" => "dropdown", "value" => "adult"})},
+      {"choice question, many, with bounds and values",
+       choice_question(%{
+         "select" => "many",
+         "min_selections" => 1,
+         "max_selections" => 2,
+         "value" => ["adult", "child"]
+       })},
+      {"choice question, many, list, with help",
+       choice_question(%{"select" => "many", "style" => "list", "help" => "Pick any."})},
+      {"boolean question", boolean_question(%{})},
+      {"boolean question, required, ticked, with help",
+       boolean_question(%{"required" => true, "value" => true, "help" => "Twelve items."})},
+      {"frame around a choice question and a boolean question", choices()}
     ]
   end
 
@@ -54,7 +76,9 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"no duplicate id", &ids_unique/1},
       {"a progress bar has a name, a max and a value within it", &progress_named_and_bounded/1},
       {"every input has a label naming it", &input_labelled/1},
-      {"aria-describedby names ids in the markup", &describedby_resolves/1}
+      {"aria-describedby names ids in the markup", &describedby_resolves/1},
+      {"every fieldset opens on a legend with text", &fieldset_has_legend/1},
+      {"every select is named by a label or by text it is labelled by", &select_named/1}
     ]
   end
 
@@ -66,7 +90,9 @@ defmodule RiddlerLiveView.AccessibilityTest do
     "no duplicate id",
     "a progress bar has a name, a max and a value within it",
     "every input has a label naming it",
-    "aria-describedby names ids in the markup"
+    "aria-describedby names ids in the markup",
+    "every fieldset opens on a legend with text",
+    "every select is named by a label or by text it is labelled by"
   ]
 
   for name <- @rule_names do
@@ -93,7 +119,9 @@ defmodule RiddlerLiveView.AccessibilityTest do
       ],
       "every component carries a class" => [
         ~s(<p data-riddler-element="text">x</p>),
-        ~s(<section class="" data-riddler-screen="s">x</section>)
+        ~s(<section class="" data-riddler-screen="s">x</section>),
+        ~s(<legend data-riddler-legend>x</legend>),
+        ~s(<option data-riddler-option="a"></option>)
       ],
       "no empty heading" => [~s(<h2 class="a"> </h2>), ~s(<h1></h1>)],
       "aria-labelledby names an id in the markup" => [
@@ -117,6 +145,18 @@ defmodule RiddlerLiveView.AccessibilityTest do
         ~s(<input class="a" aria-describedby="missing"/>),
         ~s(<p id="h">x</p><input class="a" aria-describedby="h missing"/>),
         ~s(<input class="a" aria-describedby=""/>)
+      ],
+      "every fieldset opens on a legend with text" => [
+        ~s(<fieldset class="a"><input class="b"/></fieldset>),
+        ~s(<fieldset class="a"><legend class="l"> </legend></fieldset>),
+        ~s(<fieldset class="a"><p>x</p><legend class="l">Card</legend></fieldset>)
+      ],
+      "every select is named by a label or by text it is labelled by" => [
+        ~s(<select class="a" id="s"></select>),
+        ~s(<legend id="l"> </legend><select class="a" aria-labelledby="l"></select>),
+        ~s(<label for="other">Card</label><select class="a" id="s"></select>),
+        ~s(<select class="a" aria-labelledby="missing"></select>),
+        ~s(<select class="a" id="s" aria-labelledby="s"><option>A</option></select>)
       ]
     }
 
@@ -135,7 +175,7 @@ defmodule RiddlerLiveView.AccessibilityTest do
 
   # Sabotage: drop the class attribute from the text component's <p>.
   defp component_has_class(html) do
-    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held)\b[^>]*)>/
+    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held|legend|option)\b[^>]*)>/
     |> Regex.scan(html, capture: :all_but_first)
     |> List.flatten()
     |> Enum.reject(&(&1 =~ ~r/\sclass="[^"\s][^"]*"/))
@@ -180,6 +220,55 @@ defmodule RiddlerLiveView.AccessibilityTest do
         names -> Enum.reject(names, &(&1 in ids))
       end
     end)
+  end
+
+  # Sabotage: draw the choice question's legend after its options.
+  defp fieldset_has_legend(html) do
+    ~r{<fieldset\b[^>]*>\s*(.*?)</fieldset>}s
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.reject(fn inner ->
+      case Regex.run(~r{\A<legend\b[^>]*>(.*?)</legend>}s, inner) do
+        [_, text] -> String.trim(text) != ""
+        nil -> false
+      end
+    end)
+  end
+
+  # Sabotage: point the select's aria-labelledby at an id the legend does not carry.
+  defp select_named(html) do
+    labels =
+      ~r{<label\b[^>]*\sfor="([^"]+)"[^>]*>(.*?)</label>}s
+      |> Regex.scan(html, capture: :all_but_first)
+      |> Enum.reject(fn [_for, text] -> String.trim(text) == "" end)
+      |> Enum.map(&hd/1)
+
+    texts =
+      ~r{<([a-z0-9]+)\b[^>]*\sid="([^"]+)"[^>]*>(.*?)</\1>}s
+      |> Regex.scan(html, capture: :all_but_first)
+      |> Enum.reject(fn [tag, _id, text] -> tag == "select" or String.trim(text) == "" end)
+      |> Enum.map(fn [_tag, id, _text] -> id end)
+
+    ~r/<select\b([^>]*)>/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.reject(fn attrs -> select_named?(attrs, labels, texts) end)
+  end
+
+  defp select_named?(attrs, labels, texts) do
+    by_label =
+      case Regex.run(~r/\sid="([^"]+)"/, attrs) do
+        [_, id] -> id in labels
+        nil -> false
+      end
+
+    by_text =
+      case Regex.run(~r/\saria-labelledby="([^"]+)"/, attrs) do
+        [_, names] -> names |> String.split() |> Enum.all?(&(&1 in texts))
+        nil -> false
+      end
+
+    by_label or by_text
   end
 
   # Sabotage: label the section with a title id the <h1> does not carry.
@@ -289,6 +378,74 @@ defmodule RiddlerLiveView.AccessibilityTest do
 
     assigns = %{element: element}
     rendered_to_string(~H"<Components.secret_question element={@element} />")
+  end
+
+  defp choice_question(fields) do
+    element =
+      Map.merge(
+        %{
+          "type" => "choice_question",
+          "key" => "card_type",
+          "label" => "Which library card would you like?",
+          "select" => "one",
+          "answer_options" => [
+            %{"value" => "adult", "label" => "Adult card"},
+            %{"value" => "child", "label" => "Child card"}
+          ]
+        },
+        fields
+      )
+
+    assigns = %{element: element}
+    rendered_to_string(~H"<Components.choice_question element={@element} />")
+  end
+
+  defp boolean_question(fields) do
+    element =
+      Map.merge(
+        %{
+          "type" => "boolean_question",
+          "key" => "agrees_to_rules",
+          "label" => "I agree to the borrowing rules."
+        },
+        fields
+      )
+
+    assigns = %{element: element}
+    rendered_to_string(~H"<Components.boolean_question element={@element} />")
+  end
+
+  defp choices do
+    assigns = %{
+      screen: @screen,
+      card: %{
+        "key" => "card_type",
+        "label" => "Card",
+        "select" => "one",
+        "style" => "dropdown",
+        "help" => "Ask at the desk.",
+        "answer_options" => [%{"value" => "adult", "label" => "Adult card"}]
+      },
+      branches: %{
+        "key" => "pickup_branches",
+        "label" => "Branches",
+        "select" => "many",
+        "help" => "Any.",
+        "answer_options" => [
+          %{"value" => "riverside", "label" => "Riverside"},
+          %{"value" => "hillcrest", "label" => "Hillcrest"}
+        ]
+      },
+      rules: %{"key" => "agrees_to_rules", "label" => "I agree.", "help" => "Twelve items."}
+    }
+
+    rendered_to_string(~H"""
+    <Components.frame screen={@screen}>
+      <Components.choice_question element={@card} />
+      <Components.choice_question element={@branches} />
+      <Components.boolean_question element={@rules} />
+    </Components.frame>
+    """)
   end
 
   defp questions do

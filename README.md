@@ -15,8 +15,9 @@ the host to what is its own: who may see a Journey, where it runs and what
 happens when a visitor submits.
 
 This version is unreleased. It carries the screen's frame and the components
-for the `heading`, `text`, `text_question` and `secret_question` elements, and
-the package stays at 0.0.0 until its first release.
+for the `heading`, `text`, `text_question`, `secret_question`,
+`choice_question` and `boolean_question` elements, and the package stays at
+0.0.0 until its first release.
 
 ## Installation
 

@@ -406,4 +406,329 @@ defmodule RiddlerLiveView.ComponentsTest do
       assert secret_html(@pin, %{class: "pin"}) =~ ~s(class="riddler-secret-question pin")
     end
   end
+
+  describe "choice_question/1" do
+    @card_type %{
+      "type" => "choice_question",
+      "key" => "card_type",
+      "label" => "Which library card would you like?",
+      "select" => "one",
+      "answer_options" => [
+        %{"value" => "adult", "label" => "Adult card"},
+        %{"value" => "child", "label" => "Child card"}
+      ]
+    }
+
+    @branches %{
+      "type" => "choice_question",
+      "key" => "pickup_branches",
+      "label" => "Where may we send your holds?",
+      "select" => "many",
+      "answer_options" => [
+        %{"value" => "riverside", "label" => "Riverside"},
+        %{"value" => "hillcrest", "label" => "Hillcrest"},
+        %{"value" => "old_town", "label" => "Old Town"}
+      ]
+    }
+
+    defp choice_html(element, attrs \\ %{}) do
+      assigns = Map.merge(%{element: element, name: nil, class: nil}, attrs)
+
+      rendered_to_string(
+        ~H"<Components.choice_question element={@element} name={@name} class={@class} />"
+      )
+    end
+
+    defp inputs(html), do: Regex.scan(~r{<input([^>]*)>}, html, capture: :all_but_first)
+
+    # Mutation: render the question in a <div> with a <p> for its label - goes red.
+    test "sits the options in a fieldset whose legend is the label" do
+      html = choice_html(@card_type)
+
+      assert html =~
+               ~r{^<fieldset class="riddler-choice-question" data-riddler-element="choice_question" data-riddler-key="card_type" data-riddler-select="one">}
+
+      assert html =~
+               ~r{<legend id="riddler-element-card_type-legend" class="riddler-legend" data-riddler-legend>Which library card would you like\?</legend>}
+
+      assert html =~ ~r{</fieldset>$}
+    end
+
+    # Mutation: draw a checkbox under "one" - goes red.
+    test "draws a labelled radio button per option under one" do
+      html = choice_html(@card_type)
+
+      assert [[adult], [child]] = inputs(html)
+
+      for {attrs, value} <- [{adult, "adult"}, {child, "child"}] do
+        assert attrs =~ ~s( type="radio")
+        assert attrs =~ ~s( id="riddler-element-card_type-option-#{value}")
+        assert attrs =~ ~s( name="card_type")
+        assert attrs =~ ~s( value="#{value}")
+        assert attrs =~ ~s( class="riddler-input")
+      end
+
+      assert html =~
+               ~r{<div class="riddler-option" data-riddler-option="child">\s*<input[^>]*>\s*<label for="riddler-element-card_type-option-child" class="riddler-label" data-riddler-label>Child card</label>}
+    end
+
+    # Mutation: draw a radio button under "many" - goes red.
+    test "draws a checkbox per option under many, named for a list" do
+      html = choice_html(@branches)
+
+      assert html =~ ~s(data-riddler-select="many")
+      assert [_, _, _] = rows = inputs(html)
+
+      for [attrs] <- rows do
+        assert attrs =~ ~s( type="checkbox")
+        assert attrs =~ ~s( name="pickup_branches[]")
+      end
+    end
+
+    # Mutation: compare the presented value with each option's label - goes red.
+    test "draws the presented value chosen under one, and nothing for another shape" do
+      assert [[adult], [child]] = inputs(choice_html(Map.put(@card_type, "value", "child")))
+      refute adult =~ "checked"
+      assert child =~ " checked"
+
+      for value <- [nil, ["child"], "teen", 1] do
+        refute choice_html(Map.put(@card_type, "value", value)) =~ "checked"
+      end
+    end
+
+    # Mutation: read only the list's first value under "many" - goes red.
+    test "draws every presented value chosen under many" do
+      html = choice_html(Map.put(@branches, "value", ["riverside", "old_town"]))
+      assert [[riverside], [hillcrest], [old_town]] = inputs(html)
+      assert riverside =~ " checked"
+      refute hillcrest =~ "checked"
+      assert old_town =~ " checked"
+
+      refute choice_html(Map.put(@branches, "value", "riverside")) =~ "checked"
+    end
+
+    # Mutation: mark the inputs required whatever the select - goes red.
+    test "marks the radio buttons required where the question is, and no checkbox" do
+      for [attrs] <- inputs(choice_html(Map.put(@card_type, "required", true))) do
+        assert attrs =~ ~r/ required( |$)/
+      end
+
+      refute choice_html(@card_type) =~ "required"
+      refute choice_html(Map.put(@branches, "required", true)) =~ "required"
+    end
+
+    # Mutation: carry the bounds whatever the select - goes red.
+    test "carries the bounds under many as data attributes, and nowhere else" do
+      bounded = Map.merge(@branches, %{"min_selections" => 1, "max_selections" => 2})
+      html = choice_html(bounded)
+
+      assert html =~ ~s(data-riddler-min-selections="1")
+      assert html =~ ~s(data-riddler-max-selections="2")
+
+      assert choice_html(Map.put(@branches, "min_selections", 0)) =~
+               ~s(data-riddler-min-selections="0")
+
+      refute html =~ ~r/\s(min|max)=/
+
+      unbounded =
+        choice_html(Map.merge(@card_type, %{"min_selections" => 1, "max_selections" => 2}))
+
+      refute unbounded =~ "selections"
+
+      refute choice_html(Map.merge(@branches, %{"min_selections" => "1", "max_selections" => -1})) =~
+               "selections"
+    end
+
+    # Mutation: answer :inputs for every style in choice_drawn_as/2, or drop required from the select - goes red.
+    test "draws a dropdown under one that opens on an empty option" do
+      html = choice_html(Map.merge(@card_type, %{"style" => "dropdown", "value" => "adult"}))
+
+      assert inputs(html) == []
+
+      assert html =~
+               ~r{<select id="riddler-element-card_type" name="card_type" aria-labelledby="riddler-element-card_type-legend" class="riddler-select" data-riddler-input>\s*<option value=""></option>}
+
+      assert html =~
+               ~r{<option value="adult" selected class="riddler-option" data-riddler-option="adult">\s*Adult card\s*</option>}
+
+      assert html =~
+               ~r{<option value="child" class="riddler-option" data-riddler-option="child">\s*Child card\s*</option>}
+
+      refute html =~ "multiple"
+      refute html =~ "required"
+
+      required = Map.merge(@card_type, %{"style" => "dropdown", "required" => true})
+      assert choice_html(required) =~ ~r{<select [^>]* required[ >]}
+    end
+
+    # Mutation: drop multiple={@many} from the select - goes red.
+    test "draws a list under many as a multiple select with no empty option" do
+      html = choice_html(Map.merge(@branches, %{"style" => "list", "value" => ["hillcrest"]}))
+
+      assert html =~
+               ~r{<select id="riddler-element-pickup_branches" name="pickup_branches\[\]" multiple aria-labelledby="riddler-element-pickup_branches-legend" class="riddler-select" data-riddler-input>}
+
+      refute html =~ ~s(<option value="")
+      assert html =~ ~r{<option value="hillcrest" selected }
+
+      listed = Map.merge(@branches, %{"style" => "list", "required" => true})
+      refute choice_html(listed) =~ "required"
+    end
+
+    # Mutation: draw a select for "dropdown" whatever the select - goes red.
+    test "draws inputs for a style it does not draw, or one that names the other select" do
+      for {element, type} <- [
+            {Map.put(@card_type, "style", "chips"), "radio"},
+            {Map.put(@card_type, "style", "list"), "radio"},
+            {Map.put(@card_type, "style", "radio"), "radio"},
+            {Map.put(@branches, "style", "dropdown"), "checkbox"},
+            {Map.put(@branches, "style", "checkboxes"), "checkbox"}
+          ] do
+        html = choice_html(element)
+        refute html =~ "<select"
+        assert [[attrs] | _] = inputs(html)
+        assert attrs =~ ~s( type="#{type}")
+      end
+    end
+
+    # Mutation: render an option's label with raw/1 - goes red.
+    test "escapes the legend and the option labels" do
+      html =
+        choice_html(%{
+          @card_type
+          | "label" => "<b>Card</b>",
+            "answer_options" => [%{"value" => "adult", "label" => "<i>Adult</i>"}]
+        })
+
+      refute html =~ ~r/<[bi]>/
+      assert html =~ "&lt;b&gt;Card&lt;/b&gt;"
+      assert html =~ "&lt;i&gt;Adult&lt;/i&gt;"
+
+      dropdown =
+        choice_html(
+          %{
+            @card_type
+            | "answer_options" => [%{"value" => "adult", "label" => "<i>Adult</i>"}]
+          }
+          |> Map.put("style", "dropdown")
+        )
+
+      refute dropdown =~ "<i>"
+      assert dropdown =~ "&lt;i&gt;Adult&lt;/i&gt;"
+    end
+
+    # Mutation: drop aria-describedby from the fieldset - goes red.
+    test "draws the help and names it as the fieldset's description" do
+      html = choice_html(Map.put(@card_type, "help", "You can change it at the desk."))
+
+      assert html =~
+               ~r{^<fieldset [^>]*aria-describedby="riddler-element-card_type-help"}
+
+      assert html =~
+               ~r{<p id="riddler-element-card_type-help" class="riddler-help" data-riddler-help>You can change it at the desk.</p>}
+
+      for help <- [nil, " "] do
+        html = choice_html(Map.put(@card_type, "help", help))
+        refute html =~ "riddler-help"
+        refute html =~ "aria-describedby"
+      end
+    end
+
+    # Mutation: ignore @name and always name the inputs by the key - goes red.
+    test "names the inputs by the key unless the host passes a name" do
+      assert choice_html(@card_type, %{name: "responses[card_type]"}) =~
+               ~s(name="responses[card_type]")
+
+      assert choice_html(@branches, %{name: "responses[pickup_branches]"}) =~
+               ~s(name="responses[pickup_branches][]")
+    end
+
+    # Mutation: drop @class from the fieldset's class list - goes red.
+    test "adds a host's classes to its own" do
+      assert choice_html(@card_type, %{class: "cards"}) =~
+               ~s(class="riddler-choice-question cards")
+    end
+  end
+
+  describe "boolean_question/1" do
+    @rules %{
+      "type" => "boolean_question",
+      "key" => "agrees_to_rules",
+      "label" => "I agree to the borrowing rules."
+    }
+
+    defp boolean_html(element, attrs \\ %{}) do
+      assigns = Map.merge(%{element: element, name: nil, class: nil}, attrs)
+
+      rendered_to_string(
+        ~H"<Components.boolean_question element={@element} name={@name} class={@class} />"
+      )
+    end
+
+    # Mutation: render the input as type="radio" - goes red.
+    test "renders a lone labelled checkbox that submits true" do
+      html = boolean_html(@rules)
+
+      assert html =~
+               ~r{^<div class="riddler-boolean-question" data-riddler-element="boolean_question" data-riddler-key="agrees_to_rules">}
+
+      assert html =~
+               ~r{<label for="riddler-element-agrees_to_rules" class="riddler-label" data-riddler-label>I agree to the borrowing rules.</label>}
+
+      refute html =~ "<fieldset"
+      assert [_, attrs] = Regex.run(~r{<input([^>]*)>}, html)
+      assert attrs =~ ~s( type="checkbox")
+      assert attrs =~ ~s( id="riddler-element-agrees_to_rules")
+      assert attrs =~ ~s( name="agrees_to_rules")
+      assert attrs =~ ~s( value="true")
+      assert attrs =~ ~s( class="riddler-input")
+    end
+
+    # Mutation: tick the box for any truthy value - goes red.
+    test "ticks the box only where the answer presents true" do
+      assert boolean_html(Map.put(@rules, "value", true)) =~ ~r{<input[^>]* checked[ >]}
+
+      for value <- [false, nil, "true", 1] do
+        refute boolean_html(Map.put(@rules, "value", value)) =~ "checked"
+      end
+    end
+
+    # Mutation: render required whatever the element says - goes red.
+    test "marks the checkbox required only where the question is" do
+      assert boolean_html(Map.put(@rules, "required", true)) =~ ~r{<input[^>]* required[ >]}
+      refute boolean_html(Map.put(@rules, "required", false)) =~ "required"
+      refute boolean_html(@rules) =~ "required"
+    end
+
+    # Mutation: drop aria-describedby from the checkbox - goes red.
+    test "draws the help and names it as the checkbox's description" do
+      html = boolean_html(Map.put(@rules, "help", "Up to twelve items at a time."))
+
+      assert html =~ ~s(aria-describedby="riddler-element-agrees_to_rules-help")
+
+      assert html =~
+               ~r{<p id="riddler-element-agrees_to_rules-help" class="riddler-help" data-riddler-help>Up to twelve items at a time.</p>}
+
+      refute boolean_html(Map.put(@rules, "help", " ")) =~ "aria-describedby"
+    end
+
+    # Mutation: render the label with raw/1 - goes red.
+    test "escapes the label" do
+      html = boolean_html(%{@rules | "label" => "<b>I agree</b>"})
+      refute html =~ "<b>"
+      assert html =~ "&lt;b&gt;I agree&lt;/b&gt;"
+    end
+
+    # Mutation: ignore @name and always name the input by its key - goes red.
+    test "names the checkbox by the key unless the host passes a name" do
+      assert boolean_html(@rules, %{name: "responses[agrees_to_rules]"}) =~
+               ~s(name="responses[agrees_to_rules]")
+    end
+
+    # Mutation: drop @class from the question's class list - goes red.
+    test "adds a host's classes to its own" do
+      assert boolean_html(@rules, %{class: "consent"}) =~
+               ~s(class="riddler-boolean-question consent")
+    end
+  end
 end
