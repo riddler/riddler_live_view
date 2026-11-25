@@ -169,4 +169,241 @@ defmodule RiddlerLiveView.ComponentsTest do
       assert text_html(@text, "note") =~ ~s(class="riddler-text note")
     end
   end
+
+  describe "text_question/1" do
+    @email %{
+      "type" => "text_question",
+      "key" => "reminder_email",
+      "label" => "Email for reminders",
+      "format" => "email"
+    }
+
+    defp text_question_html(element, attrs \\ %{}) do
+      assigns = Map.merge(%{element: element, name: nil, class: nil}, attrs)
+
+      rendered_to_string(
+        ~H"<Components.text_question element={@element} name={@name} class={@class} />"
+      )
+    end
+
+    # Mutation: point the label's for at an id the input does not carry - goes red.
+    test "renders the label for the input, keyed by the element" do
+      html = text_question_html(@email)
+
+      assert html =~
+               ~r{^<div class="riddler-text-question" data-riddler-element="text_question" data-riddler-key="reminder_email">}
+
+      assert html =~
+               ~r{<label for="riddler-element-reminder_email" class="riddler-label" data-riddler-label>Email for reminders</label>}
+
+      assert [_, attrs] = Regex.run(~r{<input([^>]*)>}, html)
+      assert attrs =~ ~s( id="riddler-element-reminder_email")
+      assert attrs =~ ~s( name="reminder_email")
+      assert attrs =~ ~s( class="riddler-input")
+      assert attrs =~ ~s( data-riddler-input)
+    end
+
+    # Mutation: answer "text" for every format in input_type/1 - goes red.
+    test "picks the input type from the format" do
+      for {format, type} <- [
+            {"email", "email"},
+            {"phone", "tel"},
+            {"pattern", "text"},
+            {"integer", "text"},
+            {"number", "text"},
+            {nil, "text"}
+          ] do
+        assert text_question_html(%{@email | "format" => format}) =~ ~s(<input type="#{type}")
+      end
+    end
+
+    # Mutation: copy the element's pattern, min or max onto the input - goes red.
+    test "leaves a format's pattern and bounds to riddler's validation" do
+      html =
+        text_question_html(
+          Map.merge(@email, %{
+            "format" => "integer",
+            "min" => 1,
+            "max" => 9,
+            "pattern" => "[0-9]+"
+          })
+        )
+
+      refute html =~ ~r/\s(pattern|min|max)=/
+    end
+
+    # Mutation: drop value={@value} from the input - goes red.
+    test "draws the presented value, and no value where none is presented or it is not text" do
+      assert text_question_html(Map.put(@email, "value", "ada@example.org")) =~
+               ~s(value="ada@example.org")
+
+      assert text_question_html(%{@email | "format" => "integer"} |> Map.put("value", 2)) =~
+               ~s(value="2")
+
+      refute text_question_html(@email) =~ "value="
+      refute text_question_html(Map.put(@email, "value", %{"a" => 1})) =~ "value="
+    end
+
+    # Mutation: render the value with raw/1 - goes red.
+    test "escapes the label and the value" do
+      html =
+        text_question_html(%{@email | "label" => "<b>Email</b>"} |> Map.put("value", ~s("><b>)))
+
+      refute html =~ "<b>"
+      assert html =~ "&lt;b&gt;Email&lt;/b&gt;"
+    end
+
+    # Mutation: render required whatever the element says - goes red.
+    test "marks the input required only where the question is" do
+      assert text_question_html(Map.put(@email, "required", true)) =~ ~r{<input[^>]* required[ >]}
+      refute text_question_html(Map.put(@email, "required", false)) =~ "required"
+      refute text_question_html(@email) =~ "required"
+    end
+
+    # Mutation: drop the placeholder attribute - goes red.
+    test "carries the placeholder" do
+      assert text_question_html(Map.put(@email, "placeholder", "name@example.org")) =~
+               ~s(placeholder="name@example.org")
+    end
+
+    # Mutation: drop aria-describedby from the input - goes red.
+    test "draws the help and names it as the input's description" do
+      html = text_question_html(Map.put(@email, "help", "We send one reminder a week."))
+
+      assert html =~ ~s(aria-describedby="riddler-element-reminder_email-help")
+
+      assert html =~
+               ~r{<p id="riddler-element-reminder_email-help" class="riddler-help" data-riddler-help>We send one reminder a week.</p>}
+
+      for help <- [nil, " "] do
+        html = text_question_html(Map.put(@email, "help", help))
+        refute html =~ "riddler-help"
+        refute html =~ "aria-describedby"
+      end
+    end
+
+    # Mutation: ignore @name and always name the input by its key - goes red.
+    test "names the input by the key unless the host passes a name" do
+      assert text_question_html(@email, %{name: "responses[reminder_email]"}) =~
+               ~s(name="responses[reminder_email]")
+    end
+
+    # Mutation: drop @class from the question's class list - goes red.
+    test "adds a host's classes to its own" do
+      assert text_question_html(@email, %{class: "wide"}) =~
+               ~s(class="riddler-text-question wide")
+    end
+  end
+
+  describe "secret_question/1" do
+    @pin %{
+      "type" => "secret_question",
+      "key" => "card_pin",
+      "label" => "Library card PIN",
+      "held" => false
+    }
+
+    defp secret_html(element, attrs \\ %{}) do
+      assigns = Map.merge(%{element: element, name: nil, class: nil}, attrs)
+
+      rendered_to_string(
+        ~H"<Components.secret_question element={@element} name={@name} class={@class} />"
+      )
+    end
+
+    # Mutation: render the input as type="text" - goes red.
+    test "renders a labelled password input with autocomplete off" do
+      html = secret_html(@pin)
+
+      assert html =~
+               ~r{^<div class="riddler-secret-question" data-riddler-element="secret_question" data-riddler-key="card_pin">}
+
+      assert html =~
+               ~r{<label for="riddler-element-card_pin" class="riddler-label" data-riddler-label>Library card PIN</label>}
+
+      assert [_, attrs] = Regex.run(~r{<input([^>]*)>}, html)
+      assert attrs =~ ~s( type="password")
+      assert attrs =~ ~s( id="riddler-element-card_pin")
+      assert attrs =~ ~s( name="card_pin")
+      assert attrs =~ ~s( autocomplete="off")
+      assert attrs =~ ~s( class="riddler-input")
+    end
+
+    # Mutation: value the input, value={@element["value"]} - goes red.
+    test "never draws a value, whatever the element carries" do
+      sentinel = "pin-sentinel-5150"
+
+      for element <- [
+            Map.put(@pin, "value", sentinel),
+            Map.merge(@pin, %{"held" => true, "value" => sentinel}),
+            Map.put(@pin, "value", %{"sealed" => sentinel})
+          ] do
+        html = secret_html(element)
+
+        refute html =~ sentinel
+        refute html =~ ~r/\svalue=/
+      end
+    end
+
+    # Mutation: drop the :if on the held paragraph - goes red.
+    test "says a value is held only where one is" do
+      html = secret_html(%{@pin | "held" => true})
+
+      assert html =~
+               ~r{<p id="riddler-element-card_pin-held" class="riddler-held" data-riddler-held>A value is held.</p>}
+
+      assert html =~ ~s(aria-describedby="riddler-element-card_pin-held")
+
+      for held <- [false, nil, "true"] do
+        html = secret_html(%{@pin | "held" => held})
+        refute html =~ "riddler-held"
+        refute html =~ "aria-describedby"
+      end
+    end
+
+    # Mutation: ignore @held_text - goes red.
+    test "shows the held text a host passes" do
+      assigns = %{element: %{@pin | "held" => true}}
+
+      html =
+        rendered_to_string(
+          ~H|<Components.secret_question element={@element} held_text="Your PIN is set." />|
+        )
+
+      assert html =~ ">Your PIN is set.</p>"
+    end
+
+    # Mutation: mark the input required whatever is held - goes red.
+    test "marks the input required only where the question is and nothing is held" do
+      required = Map.put(@pin, "required", true)
+
+      assert secret_html(required) =~ ~r{<input[^>]* required[ >]}
+      refute secret_html(%{required | "held" => true}) =~ "required"
+      refute secret_html(@pin) =~ "required"
+    end
+
+    # Mutation: name only the help in aria-describedby - goes red.
+    test "names the held paragraph and the help as the input's description" do
+      html = secret_html(Map.merge(@pin, %{"held" => true, "help" => "Four digits."}))
+
+      assert html =~
+               ~s(aria-describedby="riddler-element-card_pin-held riddler-element-card_pin-help")
+
+      assert html =~
+               ~r{<p id="riddler-element-card_pin-help" class="riddler-help" data-riddler-help>Four digits.</p>}
+
+      assert secret_html(Map.put(@pin, "help", "Four digits.")) =~
+               ~s(aria-describedby="riddler-element-card_pin-help")
+    end
+
+    # Mutation: ignore @name and always name the input by its key - goes red.
+    test "names the input by the key unless the host passes a name" do
+      assert secret_html(@pin, %{name: "responses[card_pin]"}) =~ ~s(name="responses[card_pin]")
+    end
+
+    # Mutation: drop @class from the question's class list - goes red.
+    test "adds a host's classes to its own" do
+      assert secret_html(@pin, %{class: "pin"}) =~ ~s(class="riddler-secret-question pin")
+    end
+  end
 end
