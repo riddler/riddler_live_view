@@ -172,8 +172,9 @@ defmodule RiddlerLiveView.Journey do
   ## What the component holds
 
   The Journey's name, the host's modules and options, the answer drawn, the
-  Journey's scope, the findings of the last refusal and a count of
-  refusals: nothing a visitor typed. What a submit carries is handed to the
+  Journey's scope, the findings of the last refusal, a count of refusals and
+  the reference of the pending retry timer, if a waiting answer set one:
+  nothing a visitor typed. What a submit carries is handed to the
   host and not kept, so a secret question's value is in no assign after the
   submit and in no markup. The component logs nothing but the line a
   callback outside its contract earns, and the secret

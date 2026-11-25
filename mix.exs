@@ -40,7 +40,28 @@ defmodule RiddlerLiveView.MixProject do
       canonical: "https://hexdocs.pm/riddler_live_view",
       source_url: @source_url,
       main: "readme",
-      extras: ["README.md", "CHANGELOG.md"],
+      # The README is the front page and the CHANGELOG sits beside it, both
+      # ungrouped at the top of the sidebar. Every guide is grouped under
+      # "How-to guides". A group is added with its first page, never empty.
+      # The decision records under docs/adr are a record for contributors,
+      # not pages for a reader of the package: they are not extras.
+      extras: [
+        "README.md",
+        "CHANGELOG.md",
+        "docs/guides/render-a-journey.md",
+        "docs/guides/scope-a-path.md",
+        "docs/guides/draw-an-element-of-your-own-kind.md",
+        "docs/guides/offer-an-authored-skip.md"
+      ],
+      groups_for_extras: [
+        "How-to guides": ~r{docs/guides/}
+      ],
+      # The root module matches none of these on purpose: it is the package's
+      # own overview and belongs above the two seams.
+      groups_for_modules: [
+        Components: [RiddlerLiveView.Components],
+        Journey: [RiddlerLiveView.Journey]
+      ],
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"]
     ]
   end
