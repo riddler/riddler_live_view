@@ -59,7 +59,8 @@ defmodule RiddlerLiveView.Journey do
       `"retry_after_ms"`, the component sets a LiveView timer,
       `Phoenix.LiveView.send_update_after/4` to itself on a connected
       socket, and asks the host again when it fires; a new answer cancels a
-      timer still pending;
+      timer still pending; a `"retry_after_ms"` above 4294967295, the
+      longest timer the runtime sets, waits that long;
     * done as a paragraph; the answer's `"result"` is the host's and is not
       drawn.
 
@@ -108,7 +109,8 @@ defmodule RiddlerLiveView.Journey do
       a `"state"` other than `"screen"`, `"waiting"` and `"done"`, or a
       screen answer without a `"screen"` map carrying a string `"key"` and
       an `"elements"` list of maps, without a `"moves"` map, or with a
-      `"progress"` that is not a map;
+      `"progress"` that is not a map, or a waiting answer whose
+      `"retry_after_ms"` is not an integer of 0 or more;
     * an answer, or a list of findings, whose markup raises when it is
       rendered: the component renders it once, inside this guard, before
       it draws it.
@@ -118,10 +120,11 @@ defmodule RiddlerLiveView.Journey do
   error line naming the callback and the kind of failure, the exception's
   module, `threw`, `exited` or that the answer is outside its contract, and
   never the exception's message, the answer or the event's parameters, any
-  of which may carry what the visitor typed. Anything else that raises is
-  not caught here: a component map `RiddlerLiveView.Components.elements/1`
-  refuses, or an option of the wrong type the host passes, is the host's
-  wiring.
+  of which may carry what the visitor typed. The retry timer a drawn
+  answer sets takes only a `"retry_after_ms"` these checks passed, capped
+  as "What is drawn" says. Anything else that raises is not caught here:
+  a component map `RiddlerLiveView.Components.elements/1` refuses, or an
+  option of the wrong type the host passes, is the host's wiring.
 
   ## A submit
 
@@ -223,6 +226,10 @@ defmodule RiddlerLiveView.Journey do
   # A change to any of these draws the Journey afresh, through the host's
   # present/1 and the access check, as on mount.
   @presenting [:journey, :host, :access, :actor]
+
+  # The longest timer the runtime sets; a longer retry_after_ms waits this
+  # long instead of raising.
+  @longest_timer_ms 4_294_967_295
 
   @impl true
   @spec mount(Socket.t()) :: {:ok, Socket.t()}
@@ -391,7 +398,7 @@ defmodule RiddlerLiveView.Journey do
         socket = assign(socket, scope: scope)
 
         with :ok <- authorize(socket, :present),
-             :ok <- drawable("the host's present/1", socket, answer: answer) do
+             :ok <- drawable("the host's present/1", socket, shown(answer)) do
           show(socket, answer)
         else
           _refused -> refuse(socket)
@@ -419,7 +426,7 @@ defmodule RiddlerLiveView.Journey do
   end
 
   defp step({:ok, answer}, callback, socket) when is_map(answer) do
-    case drawable(callback, socket, answer: answer) do
+    case drawable(callback, socket, shown(answer)) do
       :ok -> {:noreply, show(socket, answer)}
       :outside -> {:noreply, socket}
     end
@@ -429,8 +436,9 @@ defmodule RiddlerLiveView.Journey do
 
   defp step({:error, findings} = answer, callback, socket) when is_list(findings) do
     with true <- Enum.all?(findings, &is_map/1),
-         :ok <- drawable(callback, socket, findings: findings) do
-      {:noreply, assign(socket, findings: findings, refusals: socket.assigns.refusals + 1)}
+         drawn = [findings: findings, refusals: socket.assigns.refusals + 1],
+         :ok <- drawable(callback, socket, drawn) do
+      {:noreply, assign(socket, drawn)}
     else
       false -> keep(answer, callback, socket)
       :outside -> {:noreply, socket}
@@ -471,7 +479,7 @@ defmodule RiddlerLiveView.Journey do
 
   defp probe(assigns) do
     assigns
-    |> Map.merge(%{__changed__: nil, refused: false})
+    |> Map.put(:__changed__, nil)
     |> render()
     |> Safe.to_iodata()
 
@@ -484,7 +492,14 @@ defmodule RiddlerLiveView.Journey do
         Enum.all?(screen["elements"], &is_map/1) and
         (is_nil(answer["progress"]) or is_map(answer["progress"]))
 
-  defp shaped?(%{"state" => state}) when state in ["waiting", "done"], do: true
+  defp shaped?(%{"state" => "waiting"} = answer) do
+    case Map.fetch(answer, "retry_after_ms") do
+      {:ok, ms} -> is_integer(ms) and ms >= 0
+      :error -> true
+    end
+  end
+
+  defp shaped?(%{"state" => "done"}), do: true
   defp shaped?(_answer), do: false
 
   # Calls a host's callback so that a raise, a throw or an exit does not
@@ -512,8 +527,12 @@ defmodule RiddlerLiveView.Journey do
     Logger.error("RiddlerLiveView.Journey: #{callback} answered outside its contract")
   end
 
+  # What drawing an answer assigns, besides its retry timer: the probe
+  # renders exactly these before show/2 draws them.
+  defp shown(answer), do: [answer: answer, refused: false, findings: []]
+
   defp show(socket, answer) do
-    assign(socket, answer: answer, refused: false, findings: [], retry: retry(socket, answer))
+    socket |> assign(shown(answer)) |> assign(retry: retry(socket, answer))
   end
 
   defp refuse(socket),
@@ -528,7 +547,13 @@ defmodule RiddlerLiveView.Journey do
     case answer do
       %{"state" => "waiting", "retry_after_ms" => ms} when is_integer(ms) ->
         if connected?(socket),
-          do: send_update_after(self(), __MODULE__, %{id: socket.assigns.id, refresh: true}, ms)
+          do:
+            send_update_after(
+              self(),
+              __MODULE__,
+              %{id: socket.assigns.id, refresh: true},
+              min(ms, @longest_timer_ms)
+            )
 
       _answer ->
         nil
