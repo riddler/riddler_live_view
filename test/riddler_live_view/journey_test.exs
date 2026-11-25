@@ -1114,7 +1114,7 @@ defmodule RiddlerLiveView.JourneyTest do
     end
 
     # Mutation: hand retry_after_ms to the timer uncapped - goes red.
-    test "waits the longest timer the runtime sets for a longer retry_after_ms" do
+    test "waits at most the component's ceiling for a longer retry_after_ms" do
       set_status("J-1", {:waiting, %{"retry_after_ms" => 4_294_967_296}})
 
       mounted =
