@@ -13,7 +13,7 @@ defmodule RiddlerLiveView.MixProject do
       deps: deps(),
       name: "RiddlerLiveView",
       description:
-        "Phoenix LiveView components that render what Riddler presents for a Journey step: function components per node kind and a LiveComponent a host embeds",
+        "Phoenix LiveView components that render what Riddler presents for a Journey step: function components per element kind and a LiveComponent a host embeds",
       source_url: @source_url,
       docs: docs(),
       package: package(),
@@ -61,11 +61,12 @@ defmodule RiddlerLiveView.MixProject do
   # sees at one step of a Journey and `phoenix_live_view` renders it. Nothing
   # in the statifier family is a dependency here and nothing here may become
   # one: a host wires its execution engine to this package, not the reverse.
-  # The floor on `riddler` stays at 0.6 until 0.7.0 is on Hex.
+  # The floor on `riddler` is 0.8, the first release whose presented screen
+  # names its children `elements`.
   defp deps do
     [
       # Runtime
-      {:riddler, "~> 0.6"},
+      {:riddler, "~> 0.8"},
       {:phoenix_live_view, "~> 1.2"},
 
       # Dev / test
