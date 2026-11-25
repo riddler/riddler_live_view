@@ -14,6 +14,7 @@ defmodule RiddlerLiveView.SecretNoEchoTest do
   use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
+  import Phoenix.Component, only: [sigil_H: 2]
   import Phoenix.LiveViewTest, only: [rendered_to_string: 1]
 
   @sentinel "pin-sentinel-5150"
@@ -85,6 +86,28 @@ defmodule RiddlerLiveView.SecretNoEchoTest do
     refute log =~ @sentinel
     assert_received {:sealed, %{"card_pin" => %{"sealed" => sealed}}}
     refute sealed =~ @sentinel
+  end
+
+  # Mutation: draw a finding's message where it has no author_message in
+  # drawn_findings/3 - goes red.
+  test "a finding on a secret question draws neither its message nor anything it quotes" do
+    finding = %Riddler.Finding{
+      code: "response.invalid_shape",
+      message: "a message quoting #{@sentinel}",
+      field: "type",
+      element_key: "card_pin"
+    }
+
+    assigns = %{element: @pin, findings: [finding]}
+
+    html =
+      rendered_to_string(~H"""
+      <RiddlerLiveView.Components.secret_question element={@element} findings={@findings} />
+      """)
+
+    refute html =~ @sentinel
+    assert html =~ ~s(data-riddler-finding="response.invalid_shape")
+    assert html =~ "This answer could not be read."
   end
 
   # Mutation: value the input, value={@element["value"]} in secret_question/1 -
