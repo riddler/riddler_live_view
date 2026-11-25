@@ -80,13 +80,18 @@ defmodule RiddlerLiveView.Journey do
 
   It asks every time rather than once because whether an actor belongs to
   a scope is the host's, and can change while the Journey is open: a
-  membership the host revokes after the mount refuses the next submit.
+  membership the host revokes after the mount refuses the next submit. A
+  change to the `journey`, `host`, `access` or `actor` assign asks the
+  host's `present/1` and the check again, as on mount.
 
   A refused check draws one refusal, a paragraph carrying
   `data-riddler-refused` with the `refused_text`, and nothing of the
   Journey, and no submit or back reaches the host after it. A host callback
   that answers `{:error, :no_such_journey}` draws the same refusal, so the
   markup does not say whether the Journey exists or is not the visitor's.
+  It is the markup that is the same, not the work behind it: an unknown
+  Journey is answered by the host's `present/1` before any check is asked,
+  and a forbidden one by the check after it.
 
   A component given no `access`, or an `access` that is not a loaded module
   exporting `member?/2`, raises `ArgumentError` when it mounts: that is the
@@ -94,14 +99,29 @@ defmodule RiddlerLiveView.Journey do
 
   ## A host that answers outside its contract
 
-  A host callback, or the access module's callbacks, that raise, throw or
-  exit, or a host callback whose answer is not one `Riddler.Journey.Host`
-  names, do not crash the LiveView. On `present/1` and on the access check
-  the component draws the refusal; on `submit/2` and `back/2` it keeps what
-  is drawn. Either way it logs one error line naming the callback and the
-  kind of failure, the exception's module or `throw` or `exit`, and never
-  the exception's message, the answer or the event's parameters, any of
-  which may carry what the visitor typed.
+  The component does not crash the LiveView on any of these:
+
+    * a host callback, or the access module's callbacks, that raise, throw
+      or exit;
+    * a host answer that is not one `Riddler.Journey.Host` names;
+    * an answer that is not of a shape `Riddler.Journey.present/3` gives:
+      a `"state"` other than `"screen"`, `"waiting"` and `"done"`, or a
+      screen answer without a `"screen"` map carrying a string `"key"` and
+      an `"elements"` list of maps, without a `"moves"` map, or with a
+      `"progress"` that is not a map;
+    * an answer, or a list of findings, whose markup raises when it is
+      rendered: the component renders it once, inside this guard, before
+      it draws it.
+
+  On `present/1` and on the access check the component draws the refusal;
+  on `submit/2` and `back/2` it keeps what is drawn. Either way it logs one
+  error line naming the callback and the kind of failure, the exception's
+  module, `threw`, `exited` or that the answer is outside its contract, and
+  never the exception's message, the answer or the event's parameters, any
+  of which may carry what the visitor typed. Anything else that raises is
+  not caught here: a component map `RiddlerLiveView.Components.elements/1`
+  refuses, or an option of the wrong type the host passes, is the host's
+  wiring.
 
   ## A submit
 
@@ -163,6 +183,7 @@ defmodule RiddlerLiveView.Journey do
 
   require Logger
 
+  alias Phoenix.HTML.Safe
   alias Phoenix.LiveView.Socket
   alias Riddler.Journey
   alias Riddler.Journey.Access
@@ -199,6 +220,10 @@ defmodule RiddlerLiveView.Journey do
 
   @question_types ~w(text_question secret_question choice_question boolean_question)
 
+  # A change to any of these draws the Journey afresh, through the host's
+  # present/1 and the access check, as on mount.
+  @presenting [:journey, :host, :access, :actor]
+
   @impl true
   @spec mount(Socket.t()) :: {:ok, Socket.t()}
   def mount(socket) do
@@ -217,7 +242,7 @@ defmodule RiddlerLiveView.Journey do
   @spec update(map(), Socket.t()) :: {:ok, Socket.t()}
   def update(assigns, socket) do
     first = not Map.has_key?(socket.assigns, :journey)
-    changed = Map.has_key?(assigns, :journey) and assigns.journey != socket.assigns[:journey]
+    changed = Enum.any?(@presenting, &changed?(assigns, socket.assigns, &1))
 
     socket =
       socket
@@ -230,6 +255,9 @@ defmodule RiddlerLiveView.Journey do
       do: {:ok, present(socket)},
       else: {:ok, socket}
   end
+
+  defp changed?(assigns, held, key),
+    do: Map.has_key?(assigns, key) and Map.get(assigns, key) != Map.get(held, key)
 
   @impl true
   @spec handle_event(String.t(), map(), Socket.t()) :: {:noreply, Socket.t()}
@@ -362,9 +390,11 @@ defmodule RiddlerLiveView.Journey do
       {:ok, scope, answer} when is_map(answer) ->
         socket = assign(socket, scope: scope)
 
-        case authorize(socket, :present) do
-          :ok -> show(socket, answer)
-          :refused -> refuse(socket)
+        with :ok <- authorize(socket, :present),
+             :ok <- drawable("the host's present/1", socket, answer: answer) do
+          show(socket, answer)
+        else
+          _refused -> refuse(socket)
         end
 
       {:error, :no_such_journey} ->
@@ -388,25 +418,74 @@ defmodule RiddlerLiveView.Journey do
     end
   end
 
-  defp step({:ok, answer}, _callback, socket) when is_map(answer),
-    do: {:noreply, show(socket, answer)}
+  defp step({:ok, answer}, callback, socket) when is_map(answer) do
+    case drawable(callback, socket, answer: answer) do
+      :ok -> {:noreply, show(socket, answer)}
+      :outside -> {:noreply, socket}
+    end
+  end
 
   defp step({:error, :no_such_journey}, _callback, socket), do: {:noreply, refuse(socket)}
 
   defp step({:error, findings} = answer, callback, socket) when is_list(findings) do
-    if Enum.all?(findings, &is_map/1) do
+    with true <- Enum.all?(findings, &is_map/1),
+         :ok <- drawable(callback, socket, findings: findings) do
       {:noreply, assign(socket, findings: findings, refusals: socket.assigns.refusals + 1)}
     else
-      outside(callback, answer)
-      {:noreply, socket}
+      false -> keep(answer, callback, socket)
+      :outside -> {:noreply, socket}
     end
   end
 
-  # An answer outside the host's contract keeps what is drawn.
-  defp step(answer, callback, socket) do
+  defp step(answer, callback, socket), do: keep(answer, callback, socket)
+
+  # An answer outside the host's contract keeps what is drawn. One the
+  # shape check or the render probe refused is logged there, and kept the
+  # same way.
+  defp keep(answer, callback, socket) do
     outside(callback, answer)
     {:noreply, socket}
   end
+
+  # Whether the component can draw what the host answered: the answer is
+  # of a shape riddler presents, and the markup renders. The render is
+  # probed here, inside the guard, because a component that raises on a
+  # field it reads would otherwise crash the LiveView while it renders,
+  # with the event's parameters in the crash report. A refusal is logged as
+  # an answer outside the contract.
+  defp drawable(callback, socket, changes) do
+    candidate = assign(socket, changes)
+
+    with true <- shaped?(candidate.assigns.answer),
+         :ok <- guarded(callback, fn -> probe(candidate.assigns) end) do
+      :ok
+    else
+      false ->
+        outside(callback, :misshapen)
+        :outside
+
+      _logged ->
+        :outside
+    end
+  end
+
+  defp probe(assigns) do
+    assigns
+    |> Map.merge(%{__changed__: nil, refused: false})
+    |> render()
+    |> Safe.to_iodata()
+
+    :ok
+  end
+
+  defp shaped?(%{"state" => "screen", "screen" => %{} = screen, "moves" => %{}} = answer),
+    do:
+      is_binary(screen["key"]) and is_list(screen["elements"]) and
+        Enum.all?(screen["elements"], &is_map/1) and
+        (is_nil(answer["progress"]) or is_map(answer["progress"]))
+
+  defp shaped?(%{"state" => state}) when state in ["waiting", "done"], do: true
+  defp shaped?(_answer), do: false
 
   # Calls a host's callback so that a raise, a throw or an exit does not
   # crash the LiveView, whose crash report would carry the event's
