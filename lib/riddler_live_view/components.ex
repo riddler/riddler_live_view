@@ -11,8 +11,9 @@ defmodule RiddlerLiveView.Components do
     * `frame/1` draws the screen around its elements: the title, and
       progress when the answer carries it.
     * One component per element kind, named for the kind it renders:
-      `heading/1`, `text/1`, `text_question/1`, `secret_question/1`,
-      `choice_question/1`, `boolean_question/1` and `button/1`.
+      `heading/1`, `text/1`, `image/1`, `divider/1`, `link/1`,
+      `text_question/1`, `secret_question/1`, `choice_question/1`,
+      `boolean_question/1` and `button/1`.
     * `back/1` draws the Back control where the answer's `"moves"` let the
       visitor go back.
     * `elements/1` draws every element of a screen, in order, each through
@@ -29,8 +30,9 @@ defmodule RiddlerLiveView.Components do
 
     * `data-riddler-element` on the markup of each element, whose value is
       the element's kind, the `"type"` the answer gives it (`"heading"`,
-      `"text"`, `"text_question"`, `"secret_question"`,
-      `"choice_question"`, `"boolean_question"`, `"button"`);
+      `"text"`, `"image"`, `"divider"`, `"link"`, `"text_question"`,
+      `"secret_question"`, `"choice_question"`, `"boolean_question"`,
+      `"button"`);
     * `data-riddler-key` on the markup of each element, whose value is the
       element's `"key"`;
     * `data-riddler-screen` on the frame, whose value is the screen's
@@ -51,6 +53,10 @@ defmodule RiddlerLiveView.Components do
       `data-riddler-style` on a button, whose values are its `"outcome"`,
       `"true"` or `"false"` for whether it validates, and its `"style"`
       where it carries one;
+    * `data-riddler-size` and `data-riddler-fit` on an image, whose values
+      are its `"size"` and `"fit"` where it carries them, and
+      `data-riddler-style` on a link, whose value is its `"style"` where it
+      carries one;
     * `data-riddler-back` on the Back control;
     * `data-riddler-unknown` on the notice `elements/1` draws for a screen
       with elements it cannot draw, whose value is their kinds that are
@@ -63,6 +69,11 @@ defmodule RiddlerLiveView.Components do
 
   A secret question's input never carries a value: no `value` attribute,
   whatever the element carries, and `autocomplete="off"`.
+
+  A text's `"style"` is drawn as a class, `riddler-text-body` or
+  `riddler-text-caption`, so a host's stylesheet can set a caption apart. An
+  image's alt text is always drawn, as `alt=""` for a decorative image. A
+  link is a plain `<a href>`: it submits no form and raises no outcome.
 
   ## Findings
 
@@ -146,6 +157,10 @@ defmodule RiddlerLiveView.Components do
 
   use Phoenix.Component
 
+  # This module draws the link element kind as link/1, so it does not take
+  # Phoenix.Component.link/1.
+  import Phoenix.Component, except: [link: 1]
+
   alias Phoenix.LiveView.JS
 
   @question_types ~w(text_question secret_question choice_question boolean_question)
@@ -160,7 +175,7 @@ defmodule RiddlerLiveView.Components do
 
   @finding_fallback "This could not be accepted."
 
-  @element_types ~w(heading text text_question secret_question choice_question boolean_question button)
+  @element_types ~w(heading text image divider link text_question secret_question choice_question boolean_question button)
 
   @unknown_fallback "Part of this screen cannot be shown here, so it cannot be sent."
 
@@ -334,24 +349,148 @@ defmodule RiddlerLiveView.Components do
 
   @doc """
   Renders a `text` element as a paragraph.
+
+  The text's `"style"` is drawn as a class beside `riddler-text`:
+  `riddler-text-caption` for `"caption"`, and `riddler-text-body` for
+  `"body"`, for no style and for a style riddler does not offer, since a
+  text with no style is body.
   """
   attr(:element, :map,
     required: true,
-    doc: "A `text` element of the answer: its `\"key\"` and `\"text\"`."
+    doc:
+      "A `text` element of the answer: its `\"key\"` and `\"text\"` and, where present, `\"style\"`."
   )
 
   attr(:class, :any, default: nil, doc: "Classes added to the paragraph's own.")
 
   @spec text(map()) :: Phoenix.LiveView.Rendered.t()
   def text(assigns) do
+    assigns = assign(assigns, style_class: text_style_class(assigns.element["style"]))
+
     ~H"""
     <p
-      class={["riddler-text" | List.wrap(@class)]}
+      class={["riddler-text", @style_class | List.wrap(@class)]}
       data-riddler-element="text"
       data-riddler-key={@element["key"]}
     >
       {@element["text"]}
     </p>
+    """
+  end
+
+  @doc """
+  Renders an `image` element as an `<img>`.
+
+  The image's `"src"` is drawn as riddler presents it: riddler presents only
+  the URLs its rule admits, and the package checks none again. Its `"alt"`
+  is always drawn, so a visitor who cannot see the image is told what it
+  shows; an empty `"alt"` marks the image decorative and is drawn `alt=""`,
+  which tells such a visitor nothing. Its `"size"` and `"fit"`, hints a
+  renderer owns, are carried as `data-riddler-size` and `data-riddler-fit`
+  where they are strings, and are drawn no differently.
+
+  An image with no `"src"` renders nothing; riddler presents none.
+  """
+  attr(:element, :map,
+    required: true,
+    doc:
+      "An `image` element of the answer: its `\"key\"`, `\"src\"` and `\"alt\"` and, where present, `\"size\"` and `\"fit\"`."
+  )
+
+  attr(:class, :any, default: nil, doc: "Classes added to the image's own.")
+
+  @spec image(map()) :: Phoenix.LiveView.Rendered.t()
+  def image(assigns) do
+    element = assigns.element
+
+    assigns =
+      assign(assigns,
+        src: present_text(element["src"]),
+        alt: if(is_binary(element["alt"]), do: element["alt"], else: ""),
+        size: present_text(element["size"]),
+        fit: present_text(element["fit"])
+      )
+
+    ~H"""
+    <img
+      :if={@src}
+      src={@src}
+      alt={@alt}
+      class={["riddler-image" | List.wrap(@class)]}
+      data-riddler-element="image"
+      data-riddler-key={@element["key"]}
+      data-riddler-size={@size}
+      data-riddler-fit={@fit}
+    />
+    """
+  end
+
+  @doc """
+  Renders a `divider` element as an `<hr>`, a rule between the elements
+  before and after it.
+  """
+  attr(:element, :map,
+    required: true,
+    doc: "A `divider` element of the answer: its `\"key\"`."
+  )
+
+  attr(:class, :any, default: nil, doc: "Classes added to the rule's own.")
+
+  @spec divider(map()) :: Phoenix.LiveView.Rendered.t()
+  def divider(assigns) do
+    ~H"""
+    <hr
+      class={["riddler-divider" | List.wrap(@class)]}
+      data-riddler-element="divider"
+      data-riddler-key={@element["key"]}
+    />
+    """
+  end
+
+  @doc """
+  Renders a `link` element as an `<a href>` whose text is its `"label"`.
+
+  A link is a plain navigation: it submits no form, carries no outcome and
+  pushes no event, and riddler never lists it among the `"outcomes"` of the
+  moves. Following it is the browser's navigation, of which the host hears
+  nothing. The `"href"` is drawn as riddler presents it: riddler presents
+  only the URLs its rule admits, and the package checks none again. The
+  link's `"style"`, a hint a renderer owns, is carried as
+  `data-riddler-style` where it is a string, and drawn no differently.
+
+  A link whose label is blank, or that has no `"href"`, renders nothing: a
+  link with no text is read out as a bare link.
+  """
+  attr(:element, :map,
+    required: true,
+    doc:
+      "A `link` element of the answer: its `\"key\"`, `\"label\"` and `\"href\"` and, where present, `\"style\"`."
+  )
+
+  attr(:class, :any, default: nil, doc: "Classes added to the link's own.")
+
+  @spec link(map()) :: Phoenix.LiveView.Rendered.t()
+  def link(assigns) do
+    element = assigns.element
+
+    assigns =
+      assign(assigns,
+        href: present_text(element["href"]),
+        label: present_text(element["label"]),
+        style: present_text(element["style"])
+      )
+
+    ~H"""
+    <a
+      :if={@href && @label}
+      href={@href}
+      class={["riddler-link" | List.wrap(@class)]}
+      data-riddler-element="link"
+      data-riddler-key={@element["key"]}
+      data-riddler-style={@style}
+    >
+      {@label}
+    </a>
     """
   end
 
@@ -1132,6 +1271,9 @@ defmodule RiddlerLiveView.Components do
     ~H"""
     <.heading :if={@drawer == "heading"} element={@element} />
     <.text :if={@drawer == "text"} element={@element} />
+    <.image :if={@drawer == "image"} element={@element} />
+    <.divider :if={@drawer == "divider"} element={@element} />
+    <.link :if={@drawer == "link"} element={@element} />
     <.text_question
       :if={@drawer == "text_question"}
       element={@element}
@@ -1334,6 +1476,9 @@ defmodule RiddlerLiveView.Components do
   defp input_type("email"), do: "email"
   defp input_type("phone"), do: "tel"
   defp input_type(_format), do: "text"
+
+  defp text_style_class("caption"), do: "riddler-text-caption"
+  defp text_style_class(_style), do: "riddler-text-body"
 
   defp present_value(value) when is_binary(value) or is_number(value), do: value
   defp present_value(_value), do: nil

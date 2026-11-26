@@ -13,10 +13,11 @@ defmodule RiddlerLiveView do
   stay the host's.
 
   `RiddlerLiveView.Components` holds the screen's frame, the Back control and
-  a component for each element kind: `heading/1`, `text/1`, `text_question/1`,
-  `secret_question/1`, `choice_question/1`, `boolean_question/1` and
-  `button/1`. Every question draws the findings a refused submit names, with
-  the `findings` and `finding_text` attributes. `RiddlerLiveView.Journey` is
+  a component for each element kind: `heading/1`, `text/1`, `image/1`,
+  `divider/1`, `link/1`, `text_question/1`, `secret_question/1`,
+  `choice_question/1`, `boolean_question/1` and `button/1`. Every question
+  draws the findings a refused submit names, with the `findings` and
+  `finding_text` attributes. `RiddlerLiveView.Journey` is
   the LiveComponent: it asks the host where a Journey is, asks the host's
   access module whether the visitor may see it, draws the answer and hands the
   host each submit and back request.
