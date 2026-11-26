@@ -49,6 +49,14 @@ defmodule RiddlerLiveView.Components do
     * `data-riddler-select` on a choice question, `"one"` or `"many"`, and
       `data-riddler-min-selections` and `data-riddler-max-selections`
       where it carries those bounds under `"many"`;
+    * `data-riddler-style` on a text question or a choice question, whose
+      value is its `"style"` where it carries one, and
+      `data-riddler-searchable` on a choice question, `"true"` where it is
+      searchable;
+    * `data-riddler-option-description` on an option's description, whose
+      value is the option's `"value"`, and
+      `data-riddler-option-descriptions` on the list of them drawn after a
+      `<select>` or a datalist;
     * `data-riddler-outcome`, `data-riddler-validates` and
       `data-riddler-style` on a button, whose values are its `"outcome"`,
       `"true"` or `"false"` for whether it validates, and its `"style"`
@@ -505,10 +513,44 @@ defmodule RiddlerLiveView.Components do
   `value`; a presented value that is not text or a number is not drawn.
 
   The `"format"` picks the input's `type`: `email` for `"email"`, `tel` for
-  `"phone"`, and `text` for every other format and for none. The input
-  carries no `pattern`, `min` or `max`, so the browser is not asked to check
-  the format: riddler does. The browser's own checks for the input's `type`
-  and for `required` still run, and can stop a submit with the browser's own
+  `"phone"`, `date` for `"date"`, `time` for `"time"`, and `text` for every
+  other format and for none, `"datetime"` among them. A date or time input
+  carries the question's `"min"` and `"max"` as riddler presents them, which
+  admission holds to the format's shape, the shape the browser's own bounds
+  take. A time input moves by the minute, the browser's default, unless the
+  presented value or a bound carries seconds, when it carries `step="1"` and
+  moves by the second; never by a fraction of one. The values those inputs
+  submit, `YYYY-MM-DD` for a date and `HH:MM`, or `HH:MM:SS` where the input
+  moves by the second, for a time, are riddler's shapes for those formats as
+  submitted, so a host passes them on unchanged. The browser does not hold a
+  date to four digits of year, and riddler refuses a year it cannot read as
+  `response.format`. Every other input carries no `pattern`, `min` or `max`,
+  so the browser is not asked to check the format: riddler does.
+
+  The question's `"style"`, a hint, picks how the field is drawn where the
+  package draws that hint for the question's format:
+
+    * `"multiline"`, under no format or `"pattern"`, is a `<textarea>` holding
+      the presented value;
+    * `"slider"`, under `"integer"` or `"number"` where `"min"` and `"max"` are
+      both numbers, is an `<input type="range">` carrying them and the
+      question's `"step"`; a range input has no empty value, so it submits
+      the value it shows, its midpoint rounded to the step where the
+      visitor moved nothing;
+    * `"stepper"`, under `"integer"` or `"number"`, is an
+      `<input type="number">` carrying the numeric `"min"` and `"max"` it has
+      and the question's `"step"`.
+
+  A slider or a stepper with no `"step"` moves by one under `"integer"`, the
+  browser's default, and by any amount under `"number"`, `step="any"`.
+  riddler does not read the step when it validates, so the step the browser
+  holds the visitor to is the only one. Any other style, and a style under a
+  format it is not drawn for, is drawn as the question with no style: a
+  renderer that does not draw a hint loses nothing. A style that is a
+  non-blank string is carried as `data-riddler-style` either way.
+
+  The browser's own checks for the input's `type`, its bounds and step and
+  for `required` still run, and can stop a submit with the browser's own
   message; a host that wants none of them draws the form itself and adds
   `novalidate` to it.
 
@@ -523,7 +565,7 @@ defmodule RiddlerLiveView.Components do
   attr(:element, :map,
     required: true,
     doc:
-      "A `text_question` element of the answer: its `\"key\"`, `\"label\"` and, where present, `\"help\"`, `\"placeholder\"`, `\"required\"`, `\"format\"` and `\"value\"`."
+      "A `text_question` element of the answer: its `\"key\"`, `\"label\"` and, where present, `\"help\"`, `\"placeholder\"`, `\"required\"`, `\"format\"`, `\"min\"`, `\"max\"`, `\"style\"`, `\"step\"` and `\"value\"`."
   )
 
   attr(:name, :string, default: nil, doc: "The input's `name`; the element's `\"key\"` when nil.")
@@ -555,12 +597,18 @@ defmodule RiddlerLiveView.Components do
     help = present_text(assigns.element["help"])
     findings = element_findings(assigns, key)
 
+    element = assigns.element
+    drawn_as = text_drawn_as(element)
+
     assigns =
       assign(assigns,
         input_id: input_id(prefix, key),
         input_name: assigns.name || key,
-        input_type: input_type(assigns.element["format"]),
-        value: present_value(assigns.element["value"]),
+        drawn_as: drawn_as,
+        input_type: input_type(drawn_as, element["format"]),
+        bounds: text_bounds(drawn_as, element),
+        style: present_text(element["style"]),
+        value: present_value(element["value"]),
         help: help,
         help_id: help_id(prefix, key),
         drawn_findings: findings,
@@ -573,13 +621,29 @@ defmodule RiddlerLiveView.Components do
       class={["riddler-text-question" | List.wrap(@class)]}
       data-riddler-element="text_question"
       data-riddler-key={@element["key"]}
+      data-riddler-style={@style}
     >
       <label for={@input_id} class="riddler-label" data-riddler-label>{@element["label"]}</label>
+      <textarea
+        :if={@drawn_as == :multiline}
+        id={@input_id}
+        name={@input_name}
+        placeholder={@element["placeholder"]}
+        required={@element["required"] == true}
+        aria-invalid={@invalid}
+        aria-describedby={@described_by}
+        class="riddler-input riddler-textarea"
+        data-riddler-input
+      >{textarea_value(@value)}</textarea>
       <input
+        :if={@drawn_as != :multiline}
         type={@input_type}
         id={@input_id}
         name={@input_name}
         value={@value}
+        min={@bounds.min}
+        max={@bounds.max}
+        step={@bounds.step}
         placeholder={@element["placeholder"]}
         required={@element["required"] == true}
         aria-invalid={@invalid}
@@ -720,8 +784,36 @@ defmodule RiddlerLiveView.Components do
       submits an empty value where the visitor chooses none;
     * under `"many"`, `"checkboxes"` draws a checkbox per option and
       `"list"` a `<select multiple>`;
+    * `"chips"`, under either, draws the radio buttons or checkboxes, each
+      option's `<div>` carrying the class `riddler-chip` beside
+      `riddler-option` for a host's stylesheet to draw as a chip;
     * no style, or a style the package does not draw, draws radio buttons
       under `"one"` and checkboxes under `"many"`.
+
+  A style that is a non-blank string is carried as the fieldset's
+  `data-riddler-style`.
+
+  Where `"searchable"` is `true` under `"one"`, whatever the style, the
+  options are drawn as a text input bound by its `list` to a `<datalist>`
+  of the options, so the browser offers the options that match what the
+  visitor types; the input is labelled by the legend and submits the value
+  typed or picked, which riddler checks is an option's. A datalist is the
+  browser's own filter and needs no script. Under `"many"` a datalist cannot
+  pick more than one value, so the options are drawn as without the hint.
+  Either way the fieldset carries `data-riddler-searchable="true"`. The
+  input shows and submits an option's `"value"`, which some browsers list
+  beside its label and others in place of it, so a searchable question
+  reads best where its values are words a visitor would type.
+
+  An option's `"description"`, a line riddler presents under the option's
+  label, is drawn with an `id` derived from the option's: beside a radio
+  button or a checkbox, a paragraph after its label, named in that input's
+  `aria-describedby` after its findings; beside a `<select>` or a datalist,
+  whose options can hold no markup, a description list after the control,
+  each option's label and description, the `<option>` naming its
+  description in its `aria-describedby`. Browsers do not expose an
+  option's description inside an open `<select>` or datalist, so there the
+  list after the control is what a visitor reads.
 
   Each option's `"label"` is what the visitor reads and its `"value"` is
   what the input submits. The value the answer presents for the question, a
@@ -753,7 +845,7 @@ defmodule RiddlerLiveView.Components do
   attr(:element, :map,
     required: true,
     doc:
-      "A `choice_question` element of the answer: its `\"key\"`, `\"label\"`, `\"select\"` and `\"answer_options\"`, each a `\"value\"` and a `\"label\"`, and, where present, `\"help\"`, `\"required\"`, `\"style\"`, `\"min_selections\"`, `\"max_selections\"` and `\"value\"`."
+      "A `choice_question` element of the answer: its `\"key\"`, `\"label\"`, `\"select\"` and `\"answer_options\"`, each a `\"value\"` and a `\"label\"` and, where present, a `\"description\"`, and, where present, `\"help\"`, `\"required\"`, `\"style\"`, `\"searchable\"`, `\"min_selections\"`, `\"max_selections\"` and `\"value\"`."
   )
 
   attr(:name, :string,
@@ -791,23 +883,25 @@ defmodule RiddlerLiveView.Components do
     chosen = chosen_values(element["value"], many)
     findings = element_findings(assigns, key)
 
-    options =
-      for option <- List.wrap(element["answer_options"]) do
-        %{
-          value: option["value"],
-          label: option["label"],
-          id: option_id(prefix, key, option["value"]),
-          chosen: option["value"] in chosen
-        }
-      end
+    finding_ids = described_by(findings, [])
+
+    options = choice_options(element["answer_options"], {prefix, key}, chosen, finding_ids)
+    searchable = element["searchable"] == true
+    drawn_as = choice_drawn_as(element["style"], many, searchable)
 
     assigns =
       assign(assigns,
         options: options,
         many: many,
-        drawn_as: choice_drawn_as(element["style"], many),
+        drawn_as: drawn_as,
+        chips: drawn_as == :inputs and element["style"] == "chips",
+        style: present_text(element["style"]),
+        searchable: if(searchable, do: "true"),
         legend_id: legend_id(prefix, key),
         select_id: input_id(prefix, key),
+        datalist_id: input_id(prefix, key) <> "-options",
+        selected: List.first(chosen),
+        descriptions: Enum.filter(options, & &1.description),
         input_name: choice_name(assigns.name || key, many),
         required: not many and element["required"] == true,
         min_selections: many && selection_bound(element["min_selections"]),
@@ -816,7 +910,7 @@ defmodule RiddlerLiveView.Components do
         help_id: help_id(prefix, key),
         drawn_findings: findings,
         invalid: invalid(findings),
-        finding_ids: described_by(findings, []),
+        finding_ids: finding_ids,
         described_by: described_by(findings, [help && help_id(prefix, key)])
       )
 
@@ -828,13 +922,15 @@ defmodule RiddlerLiveView.Components do
       data-riddler-select={if(@many, do: "many", else: "one")}
       data-riddler-min-selections={@min_selections}
       data-riddler-max-selections={@max_selections}
+      data-riddler-style={@style}
+      data-riddler-searchable={@searchable}
       aria-describedby={@described_by}
     >
       <legend id={@legend_id} class="riddler-legend" data-riddler-legend>{@element["label"]}</legend>
       <div
         :for={option <- @options}
         :if={@drawn_as == :inputs}
-        class="riddler-option"
+        class={if(@chips, do: "riddler-option riddler-chip", else: "riddler-option")}
         data-riddler-option={option.value}
       >
         <input
@@ -845,12 +941,46 @@ defmodule RiddlerLiveView.Components do
           checked={option.chosen}
           required={@required}
           aria-invalid={@invalid}
-          aria-describedby={@finding_ids}
+          aria-describedby={option.described_by}
           class="riddler-input"
           data-riddler-input
         />
         <label for={option.id} class="riddler-label" data-riddler-label>{option.label}</label>
+        <p
+          :if={option.description}
+          id={option.description_id}
+          class="riddler-option-description"
+          data-riddler-option-description={option.value}
+        >
+          {option.description}
+        </p>
       </div>
+      <input
+        :if={@drawn_as == :search}
+        type="text"
+        id={@select_id}
+        name={@input_name}
+        value={@selected}
+        list={@datalist_id}
+        autocomplete="off"
+        required={@required}
+        aria-invalid={@invalid}
+        aria-describedby={@finding_ids}
+        aria-labelledby={@legend_id}
+        class="riddler-input riddler-search"
+        data-riddler-input
+      />
+      <datalist :if={@drawn_as == :search} id={@datalist_id} class="riddler-options">
+        <option
+          :for={option <- @options}
+          value={option.value}
+          aria-describedby={option.description_id}
+          class="riddler-option"
+          data-riddler-option={option.value}
+        >
+          {option.label}
+        </option>
+      </datalist>
       <select
         :if={@drawn_as == :select}
         id={@select_id}
@@ -870,10 +1000,27 @@ defmodule RiddlerLiveView.Components do
           selected={option.chosen}
           class="riddler-option"
           data-riddler-option={option.value}
+          aria-describedby={option.description_id}
         >
           {option.label}
         </option>
       </select>
+      <dl
+        :if={@drawn_as != :inputs and @descriptions != []}
+        class="riddler-option-descriptions"
+        data-riddler-option-descriptions
+      >
+        <%= for option <- @descriptions do %>
+          <dt class="riddler-option-label">{option.label}</dt>
+          <dd
+            id={option.description_id}
+            class="riddler-option-description"
+            data-riddler-option-description={option.value}
+          >
+            {option.description}
+          </dd>
+        <% end %>
+      </dl>
       <.finding_list findings={@drawn_findings} />
       <p :if={@help} id={@help_id} class="riddler-help" data-riddler-help>{@help}</p>
     </fieldset>
@@ -1459,9 +1606,37 @@ defmodule RiddlerLiveView.Components do
   defp legend_id(prefix, key), do: element_id(prefix, key) <> "-legend"
   defp option_id(prefix, key, value), do: element_id(prefix, key) <> "-option-#{value}"
 
-  defp choice_drawn_as("dropdown", false), do: :select
-  defp choice_drawn_as("list", true), do: :select
-  defp choice_drawn_as(_style, _many), do: :inputs
+  # Each option as drawn: its id, whether it is chosen, and its description
+  # with the id the option names it by after its findings.
+  defp choice_options(answer_options, {prefix, key}, chosen, finding_ids) do
+    for option <- List.wrap(answer_options) do
+      id = option_id(prefix, key, option["value"])
+      description = present_text(option["description"])
+      description_id = description && id <> "-description"
+
+      %{
+        value: option["value"],
+        label: option["label"],
+        id: id,
+        chosen: option["value"] in chosen,
+        description: description,
+        description_id: description_id,
+        described_by: join_ids([finding_ids, description_id])
+      }
+    end
+  end
+
+  defp choice_drawn_as(_style, false, true), do: :search
+  defp choice_drawn_as("dropdown", false, _searchable), do: :select
+  defp choice_drawn_as("list", true, _searchable), do: :select
+  defp choice_drawn_as(_style, _many, _searchable), do: :inputs
+
+  defp join_ids(ids) do
+    case Enum.filter(ids, & &1) do
+      [] -> nil
+      ids -> Enum.join(ids, " ")
+    end
+  end
 
   defp choice_name(name, true), do: name <> "[]"
   defp choice_name(name, false), do: name
@@ -1473,9 +1648,92 @@ defmodule RiddlerLiveView.Components do
   defp selection_bound(bound) when is_integer(bound) and bound >= 0, do: bound
   defp selection_bound(_bound), do: nil
 
-  defp input_type("email"), do: "email"
-  defp input_type("phone"), do: "tel"
-  defp input_type(_format), do: "text"
+  # How a text question is drawn: by its style where the package draws that
+  # style for the question's format, else by its format alone.
+  #
+  #   * `"multiline"` is a textarea under no format and under `"pattern"`;
+  #   * `"slider"` is a range input under `"integer"` and `"number"` where
+  #     both bounds are numbers, since a range input with no bounds holds
+  #     the visitor between 0 and 100;
+  #   * `"stepper"` is a number input under `"integer"` and `"number"`;
+  #   * a `"date"` or `"time"` format is the browser's own input for it.
+  #
+  # Every other style, and every style under another format, is drawn as the
+  # question with no style: riddler passes a hint it does not offer through,
+  # and a renderer that does not draw it loses nothing.
+  defp text_drawn_as(%{"style" => "multiline"} = element) do
+    if element["format"] in [nil, "pattern"],
+      do: :multiline,
+      else: text_drawn_as(Map.delete(element, "style"))
+  end
+
+  defp text_drawn_as(%{"style" => "slider", "format" => format, "min" => min, "max" => max})
+       when format in ["integer", "number"] and is_number(min) and is_number(max),
+       do: :slider
+
+  defp text_drawn_as(%{"style" => "stepper", "format" => format})
+       when format in ["integer", "number"],
+       do: :stepper
+
+  defp text_drawn_as(%{"format" => "date"}), do: :date
+  defp text_drawn_as(%{"format" => "time"}), do: :time
+
+  defp text_drawn_as(_element), do: :field
+
+  defp input_type(:slider, _format), do: "range"
+  defp input_type(:stepper, _format), do: "number"
+  defp input_type(:date, _format), do: "date"
+  defp input_type(:time, _format), do: "time"
+  defp input_type(_drawn_as, "email"), do: "email"
+  defp input_type(_drawn_as, "phone"), do: "tel"
+  defp input_type(_drawn_as, _format), do: "text"
+
+  # The bounds and step an input carries: a date's or a time's bounds as
+  # riddler presents them, which admission holds to the format's shape, the
+  # browser's own; a slider's or a stepper's numeric bounds and its step.
+  # Every other input carries none, and riddler checks the format.
+  defp text_bounds(drawn_as, element) when drawn_as in [:date, :time] do
+    min = present_text(element["min"])
+    max = present_text(element["max"])
+
+    %{min: min, max: max, step: time_step(drawn_as, [element["value"], min, max])}
+  end
+
+  defp text_bounds(drawn_as, element) when drawn_as in [:slider, :stepper] do
+    %{
+      min: number_or_nil(element["min"]),
+      max: number_or_nil(element["max"]),
+      step: number_step(element["step"], element["format"])
+    }
+  end
+
+  defp text_bounds(_drawn_as, _element), do: %{min: nil, max: nil, step: nil}
+
+  # A time input moves by the minute unless told otherwise, and the browser
+  # refuses a value with seconds in it as off the step. Where the value or a
+  # bound carries seconds, the input moves by the second, so the browser
+  # takes and submits `HH:MM:SS`; never by a fraction of one, which riddler
+  # refuses.
+  defp time_step(:time, values) do
+    if Enum.any?(values, &(is_binary(&1) and &1 =~ ~r/\A\d{2}:\d{2}:\d{2}\z/)), do: "1"
+  end
+
+  defp time_step(:date, _values), do: nil
+
+  # A step the question carries, above zero; otherwise any number moves a
+  # number question's input, and an integer question's moves by one, the
+  # browser's own default.
+  defp number_step(step, _format) when is_number(step) and step > 0, do: step
+  defp number_step(_step, "number"), do: "any"
+  defp number_step(_step, _format), do: nil
+
+  # A newline opens a textarea's content, since the HTML parser drops the
+  # first newline there: a presented value that opens on a newline keeps it.
+  defp textarea_value(nil), do: "\n"
+  defp textarea_value(value), do: "\n" <> to_string(value)
+
+  defp number_or_nil(value) when is_number(value), do: value
+  defp number_or_nil(_value), do: nil
 
   defp text_style_class("caption"), do: "riddler-text-caption"
   defp text_style_class(_style), do: "riddler-text-body"

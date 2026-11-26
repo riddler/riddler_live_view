@@ -462,6 +462,213 @@ defmodule RiddlerLiveView.ComponentsTest do
     end
   end
 
+  describe "text_question/1 with a date or time format and a style" do
+    @birth_date %{
+      "type" => "text_question",
+      "key" => "birth_date",
+      "label" => "Date of birth",
+      "format" => "date"
+    }
+
+    @pickup_time %{
+      "type" => "text_question",
+      "key" => "pickup_time",
+      "label" => "Preferred pickup time",
+      "format" => "time"
+    }
+
+    @holds %{
+      "type" => "text_question",
+      "key" => "holds_limit",
+      "label" => "How many holds at once?",
+      "format" => "integer",
+      "style" => "slider",
+      "min" => 1,
+      "max" => 10
+    }
+
+    defp input_attrs(html) do
+      assert [_, attrs] = Regex.run(~r{<input([^>]*)>}, html)
+      attrs
+    end
+
+    # Mutation: answer "text" for the date format in input_type/2 - goes red.
+    test "draws a date question as a date input with its presented bounds and value" do
+      attrs =
+        @birth_date
+        |> Map.merge(%{"min" => "1900-01-01", "max" => "2026-11-26", "value" => "1990-05-04"})
+        |> text_question_html()
+        |> input_attrs()
+
+      assert attrs =~ ~r/^ type="date"/
+      assert attrs =~ ~s( value="1990-05-04")
+      assert attrs =~ ~s( min="1900-01-01")
+      assert attrs =~ ~s( max="2026-11-26")
+      refute attrs =~ " step="
+    end
+
+    # Mutation: answer "text" for the time format in input_type/2 - goes red.
+    test "draws a time question as a time input that moves by the minute" do
+      attrs =
+        @pickup_time
+        |> Map.merge(%{"min" => "09:00", "max" => "17:30"})
+        |> text_question_html()
+        |> input_attrs()
+
+      assert attrs =~ ~r/^ type="time"/
+      assert attrs =~ ~s( min="09:00")
+      assert attrs =~ ~s( max="17:30")
+      refute attrs =~ " step="
+    end
+
+    # Mutation: answer nil from time_step/2 whatever the values - goes red.
+    test "moves a time input by the second where its value or a bound carries seconds" do
+      for extra <- [%{"value" => "10:15:30"}, %{"min" => "09:00:00"}, %{"max" => "17:30:00"}] do
+        attrs = @pickup_time |> Map.merge(extra) |> text_question_html() |> input_attrs()
+        assert attrs =~ ~s( step="1")
+      end
+
+      refute @pickup_time |> Map.put("value", "10:15:30.5") |> text_question_html() =~ " step="
+    end
+
+    # Mutation: copy a bound that is not a string onto a date input - goes red.
+    test "draws no bound that is not text on a date or time input" do
+      html =
+        @birth_date |> Map.merge(%{"min" => 1900, "max" => " "}) |> text_question_html()
+
+      refute html =~ ~r/\s(min|max)=/
+    end
+
+    # Mutation: draw the datetime format as a datetime-local input - goes red.
+    test "draws a datetime question as the plain text input it was" do
+      attrs =
+        @birth_date
+        |> Map.merge(%{"format" => "datetime", "min" => "2026-11-24T09:00:00-07:00"})
+        |> text_question_html()
+        |> input_attrs()
+
+      assert attrs =~ ~r/^ type="text"/
+      refute attrs =~ ~r/\s(min|max|step)=/
+    end
+
+    # Mutation: draw the multiline style as an input - goes red.
+    test "draws a multiline question as a labelled textarea holding the presented value" do
+      html =
+        text_question_html(%{
+          "type" => "text_question",
+          "key" => "access_needs",
+          "label" => "Anything we should know at the desk?",
+          "style" => "multiline",
+          "required" => true,
+          "help" => "Optional.",
+          "value" => "Step-free <entrance>"
+        })
+
+      refute html =~ "<input"
+
+      assert html =~
+               ~r{<textarea id="riddler-element-access_needs" name="access_needs" required aria-describedby="riddler-element-access_needs-help" class="riddler-input riddler-textarea" data-riddler-input>\nStep-free &lt;entrance&gt;</textarea>}
+
+      assert html =~ ~s(data-riddler-style="multiline")
+    end
+
+    # Mutation: drop the newline textarea_value/1 opens the content on - goes red.
+    test "keeps a presented value's own opening newline in a textarea" do
+      element = %{
+        "type" => "text_question",
+        "key" => "access_needs",
+        "label" => "Anything we should know at the desk?",
+        "style" => "multiline"
+      }
+
+      assert text_question_html(Map.put(element, "value", "\nStep-free entrance")) =~
+               ~r{data-riddler-input>\n\nStep-free entrance</textarea>}
+
+      assert text_question_html(element) =~ ~r{data-riddler-input>\n</textarea>}
+    end
+
+    # Mutation: answer :multiline for the style whatever the format - goes red.
+    test "draws a multiline question under a pattern as a textarea, and under another format as its input" do
+      assert text_question_html(
+               %{@email | "format" => "pattern"}
+               |> Map.put("style", "multiline")
+             ) =~
+               "<textarea"
+
+      for {format, type} <- [{"email", "email"}, {"date", "date"}, {"integer", "text"}] do
+        html = text_question_html(%{@email | "format" => format} |> Map.put("style", "multiline"))
+        refute html =~ "<textarea"
+        assert html =~ ~s(<input type="#{type}")
+      end
+    end
+
+    # Mutation: drop min and max from the slider's input - goes red.
+    test "draws a slider as a range input with its bounds and step" do
+      attrs =
+        @holds |> Map.merge(%{"step" => 3, "value" => 4}) |> text_question_html() |> input_attrs()
+
+      assert attrs =~ ~r/^ type="range"/
+      assert attrs =~ ~s( min="1")
+      assert attrs =~ ~s( max="10")
+      assert attrs =~ ~s( step="3")
+      assert attrs =~ ~s( value="4")
+    end
+
+    # Mutation: draw a slider whatever its bounds - goes red.
+    test "draws a slider missing a bound, or under a format it does not read, as with no style" do
+      for element <- [
+            Map.delete(@holds, "max"),
+            Map.put(@holds, "min", "1"),
+            Map.put(@holds, "max", "10"),
+            Map.put(@holds, "format", "email")
+          ] do
+        attrs = element |> text_question_html() |> input_attrs()
+        refute attrs =~ ~s(type="range")
+        refute attrs =~ ~r/\s(min|max|step)=/
+      end
+    end
+
+    # Mutation: drop the "any" step for the number format - goes red.
+    test "draws a stepper as a number input, by any step under number and by one under integer" do
+      stepper = %{@holds | "style" => "stepper"} |> Map.delete("max")
+
+      attrs = stepper |> text_question_html() |> input_attrs()
+      assert attrs =~ ~r/^ type="number"/
+      assert attrs =~ ~s( min="1")
+      refute attrs =~ " max="
+      refute attrs =~ " step="
+
+      number = %{stepper | "format" => "number"} |> text_question_html() |> input_attrs()
+      assert number =~ ~s( step="any")
+
+      stepped = stepper |> Map.put("step", 0.5) |> Map.put("format", "number")
+      assert stepped |> text_question_html() |> input_attrs() =~ ~s( step="0.5")
+
+      assert stepper |> Map.put("step", 2) |> text_question_html() |> input_attrs() =~
+               ~s( step="2")
+
+      for step <- [0, -1, "2"] do
+        refute stepper |> Map.put("step", step) |> text_question_html() =~ " step="
+      end
+
+      refute %{stepper | "format" => "pattern"} |> text_question_html() =~ ~s(type="number")
+    end
+
+    # Mutation: raise for a style the package does not draw - goes red.
+    test "draws a style it does not draw, or one that is not text, as with no style" do
+      for style <- ["carousel", 7, nil] do
+        html = text_question_html(Map.put(@email, "style", style))
+        assert html =~ ~s(<input type="email")
+        refute html =~ "<textarea"
+      end
+
+      assert text_question_html(Map.put(@email, "style", "carousel")) =~
+               ~s(data-riddler-style="carousel")
+
+      refute text_question_html(Map.put(@email, "style", 7)) =~ "data-riddler-style"
+    end
+  end
+
   describe "secret_question/1" do
     @pin %{
       "type" => "secret_question",
@@ -814,6 +1021,126 @@ defmodule RiddlerLiveView.ComponentsTest do
     test "adds a host's classes to its own" do
       assert choice_html(@card_type, %{class: "cards"}) =~
                ~s(class="riddler-choice-question cards")
+    end
+  end
+
+  describe "choice_question/1 with chips, searchable and option descriptions" do
+    @card_kinds %{
+      "type" => "choice_question",
+      "key" => "card_type",
+      "label" => "Which library card would you like?",
+      "select" => "one",
+      "answer_options" => [
+        %{
+          "value" => "adult",
+          "label" => "Adult card",
+          "description" => "For patrons of 18 and over."
+        },
+        %{"value" => "child", "label" => "Child card"}
+      ]
+    }
+
+    # Mutation: drop the description id from the option input's aria-describedby - goes red.
+    test "draws an option's description under its label and names it from its input" do
+      html = choice_html(@card_kinds)
+
+      assert [[adult], [child]] = inputs(html)
+      assert adult =~ ~s( aria-describedby="riddler-element-card_type-option-adult-description")
+      refute child =~ "aria-describedby"
+
+      assert html =~
+               ~r{<label for="riddler-element-card_type-option-adult" class="riddler-label" data-riddler-label>Adult card</label>\s*<p id="riddler-element-card_type-option-adult-description" class="riddler-option-description" data-riddler-option-description="adult">\s*For patrons of 18 and over.\s*</p>}
+    end
+
+    # Mutation: name the description ahead of the findings - goes red.
+    test "names an option's findings ahead of its description" do
+      findings = [%{"code" => "response.required", "element_key" => "card_type"}]
+      assigns = %{element: @card_kinds, findings: findings}
+
+      html =
+        rendered_to_string(
+          ~H"<Components.choice_question element={@element} findings={@findings} />"
+        )
+
+      assert [[adult] | _] = inputs(html)
+
+      assert adult =~
+               ~s( aria-describedby="riddler-element-card_type-finding-1 riddler-element-card_type-option-adult-description")
+    end
+
+    # Mutation: drop aria-describedby from the select's options - goes red.
+    test "lists the descriptions after a select, each named by its option" do
+      html = choice_html(Map.put(@card_kinds, "style", "dropdown"))
+
+      assert html =~
+               ~r{<option value="adult" class="riddler-option" data-riddler-option="adult" aria-describedby="riddler-element-card_type-option-adult-description">}
+
+      assert html =~
+               ~r{<dl class="riddler-option-descriptions" data-riddler-option-descriptions>\s*<dt class="riddler-option-label">Adult card</dt>\s*<dd id="riddler-element-card_type-option-adult-description" class="riddler-option-description" data-riddler-option-description="adult">\s*For patrons of 18 and over.\s*</dd>\s*</dl>}
+
+      refute choice_html(Map.put(@card_type, "style", "dropdown")) =~ "<dl"
+    end
+
+    # Mutation: draw a select for chips - goes red.
+    test "draws chips as the select's own inputs, each marked a chip" do
+      for {element, type} <- [
+            {Map.put(@card_kinds, "style", "chips"), "radio"},
+            {Map.put(@branches, "style", "chips"), "checkbox"}
+          ] do
+        html = choice_html(element)
+
+        refute html =~ "<select"
+        assert html =~ ~s(data-riddler-style="chips")
+        assert [[attrs] | _] = inputs(html)
+        assert attrs =~ ~s( type="#{type}")
+        assert [_ | _] = Regex.scan(~r/<div class="riddler-option riddler-chip"/, html)
+      end
+
+      refute choice_html(@card_kinds) =~ "riddler-chip"
+    end
+
+    # Mutation: answer :inputs for searchable in choice_drawn_as/3 - goes red.
+    test "draws a searchable question under one as a text input bound to a datalist" do
+      html =
+        choice_html(
+          Map.merge(@card_kinds, %{"searchable" => true, "required" => true, "value" => "child"})
+        )
+
+      assert html =~ ~s(data-riddler-searchable="true")
+      assert [[attrs]] = inputs(html)
+      assert attrs =~ ~r/^ type="text"/
+      assert attrs =~ ~s( id="riddler-element-card_type")
+      assert attrs =~ ~s( name="card_type")
+      assert attrs =~ ~s( value="child")
+      assert attrs =~ ~s( list="riddler-element-card_type-options")
+      assert attrs =~ ~s( required)
+      assert attrs =~ ~s( aria-labelledby="riddler-element-card_type-legend")
+
+      assert html =~
+               ~r{<datalist id="riddler-element-card_type-options" class="riddler-options">\s*<option value="adult" aria-describedby="riddler-element-card_type-option-adult-description" class="riddler-option" data-riddler-option="adult">\s*Adult card\s*</option>}
+
+      assert html =~ ~s(<dd id="riddler-element-card_type-option-adult-description")
+
+      for style <- ["dropdown", "chips"] do
+        styled = choice_html(Map.merge(@card_kinds, %{"searchable" => true, "style" => style}))
+        assert styled =~ "<datalist"
+        refute styled =~ "<select"
+        refute styled =~ "riddler-chip"
+      end
+    end
+
+    # Mutation: draw the datalist under many - goes red.
+    test "draws a searchable question under many, and one not searchable, as without the hint" do
+      many = choice_html(Map.put(@branches, "searchable", true))
+      refute many =~ "<datalist"
+      assert [_, _, _] = inputs(many)
+      assert many =~ ~s(data-riddler-searchable="true")
+
+      for searchable <- [false, "true", nil] do
+        html = choice_html(Map.put(@card_kinds, "searchable", searchable))
+        refute html =~ "<datalist"
+        refute html =~ "data-riddler-searchable"
+      end
     end
   end
 

@@ -196,11 +196,16 @@ or an outcome no presented button raises, reaches nobody: the component
 ignores it.
 
 The text question's input is `type="email"` for the email format, `type="tel"`
-for the phone format and carries `required` where the question does. It sets
-no `pattern`, `min` or `max`, but the browser's own checks for the type and
-for `required` still run, and can stop a submit with the browser's own
-message before your host is asked. A host that wants every check left to riddler
-draws the screen itself, with the components of `RiddlerLiveView.Components`
+for the phone format, `type="date"` and `type="time"` for the date and time
+formats, and carries `required` where the question does. A date or time input
+carries the question's `min` and `max`, and what it submits is already in
+riddler's shape for the format, so your host passes it on as it comes. A
+datetime question is drawn as a plain text input. A slider or a stepper
+carries its bounds and step. No other input sets a `pattern`, `min` or
+`max`, but the browser's own checks for the type, the bounds and `required`
+still run, and can stop a submit with the browser's own message before your
+host is asked. A host that wants every check left to riddler draws the
+screen itself, with the components of `RiddlerLiveView.Components`
 inside a form of its own, and adds `novalidate` there: the form
 `RiddlerLiveView.Journey` draws carries no `novalidate`. A button that
 declares `validates: false` carries `formnovalidate`, so the browser's checks

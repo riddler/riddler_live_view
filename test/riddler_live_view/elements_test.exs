@@ -233,12 +233,13 @@ defmodule RiddlerLiveView.ElementsTest do
       refute link =~ ~r/\s(?:phx-[a-z-]+|name|value|type|form)=/
     end
 
-    # Mutation: take the input type from the format as written - goes red.
-    test "draws a question carrying a 0.9 format, hint and accessible label as before" do
+    # Mutation: draw a multiline style as a textarea whatever the format - goes red.
+    test "draws a date question riddler presents as a date input, its multiline hint not drawn" do
       html = presented_html(presented())
 
-      assert html =~ ~r/<input type="text" id="riddler-element-birth_date"/
-      refute html =~ "multiline"
+      assert html =~ ~r/<input type="date" id="riddler-element-birth_date"/
+      assert html =~ ~s(data-riddler-style="multiline")
+      refute html =~ "<textarea"
       refute html =~ "Your date of birth"
     end
   end

@@ -47,6 +47,24 @@ defmodule RiddlerLiveView.AccessibilityTest do
          "value" => "ada@example.org"
        })},
       {"text question, phone format", text_question(%{"format" => "phone", "key" => "phone"})},
+      {"text question, date format with bounds",
+       text_question(%{"format" => "date", "min" => "1900-01-01", "max" => "2026-11-26"})},
+      {"text question, time format with seconds",
+       text_question(%{"format" => "time", "value" => "10:15:30"})},
+      {"text question, datetime format", text_question(%{"format" => "datetime"})},
+      {"text question, multiline, required, with help",
+       text_question(%{
+         "format" => nil,
+         "style" => "multiline",
+         "required" => true,
+         "help" => "Optional."
+       })},
+      {"text question, slider",
+       text_question(%{"format" => "integer", "style" => "slider", "min" => 1, "max" => 10})},
+      {"text question, stepper, with a finding",
+       text_question(%{"format" => "number", "style" => "stepper"}, [
+         finding("response.out_of_range", "reminder_email")
+       ])},
       {"secret question", secret_question(%{})},
       {"secret question, held", secret_question(%{"held" => true})},
       {"secret question, required, held, with help",
@@ -70,6 +88,20 @@ defmodule RiddlerLiveView.AccessibilityTest do
        })},
       {"choice question, many, list, with help",
        choice_question(%{"select" => "many", "style" => "list", "help" => "Pick any."})},
+      {"choice question, one, chips, with option descriptions",
+       choice_question(%{"style" => "chips", "answer_options" => described_options()})},
+      {"choice question, many, chips",
+       choice_question(%{"select" => "many", "style" => "chips"})},
+      {"choice question, one, dropdown, with option descriptions and a finding",
+       choice_question(%{"style" => "dropdown", "answer_options" => described_options()}, [
+         finding("response.required", "card_type")
+       ])},
+      {"choice question, one, searchable, with option descriptions and a finding",
+       choice_question(%{"searchable" => true, "answer_options" => described_options()}, [
+         finding("response.not_an_option", "card_type")
+       ])},
+      {"choice question, many, searchable",
+       choice_question(%{"select" => "many", "searchable" => true})},
       {"boolean question", boolean_question(%{})},
       {"boolean question, required, ticked, with help",
        boolean_question(%{"required" => true, "value" => true, "help" => "Twelve items."})},
@@ -130,7 +162,10 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"every image carries an alt attribute", &image_has_alt/1},
       {"every link has an href and text", &link_has_href_and_text/1},
       {"a link submits nothing and raises no outcome", &link_submits_nothing/1},
-      {"a divider is an hr that keeps its separator role", &divider_is_separator/1}
+      {"a divider is an hr that keeps its separator role", &divider_is_separator/1},
+      {"every option description is named by its option", &option_description_named/1},
+      {"a list attribute names a datalist in the markup", &list_names_datalist/1},
+      {"a slider carries a min and a max", &slider_bounded/1}
     ]
   end
 
@@ -153,7 +188,10 @@ defmodule RiddlerLiveView.AccessibilityTest do
     "every image carries an alt attribute",
     "every link has an href and text",
     "a link submits nothing and raises no outcome",
-    "a divider is an hr that keeps its separator role"
+    "a divider is an hr that keeps its separator role",
+    "every option description is named by its option",
+    "a list attribute names a datalist in the markup",
+    "a slider carries a min and a max"
   ]
 
   for name <- @rule_names do
@@ -199,6 +237,8 @@ defmodule RiddlerLiveView.AccessibilityTest do
         ~s(<progress class="a" aria-label="P" max="3"></progress>)
       ],
       "every input has a label naming it" => [
+        ~s(<textarea class="a" id="notes"></textarea>),
+        ~s(<legend id="l"> </legend><input class="a" id="s" aria-labelledby="l"/>),
         ~s(<input class="a" id="pin" type="password"/>),
         ~s(<label for="other">PIN</label><input class="a" id="pin"/>),
         ~s(<label for="pin"> </label><input class="a" id="pin"/>),
@@ -272,6 +312,21 @@ defmodule RiddlerLiveView.AccessibilityTest do
         ~s(<hr class="a" role="presentation">),
         ~s(<hr class="a" aria-hidden="true">),
         ~s(<div class="a" data-riddler-element="divider"></div>)
+      ],
+      "every option description is named by its option" => [
+        ~s(<input class="a" id="o"/><p id="d" class="d" data-riddler-option-description="adult">18 and over.</p>),
+        ~s(<option class="a" aria-describedby="x">A</option><dd id="d" class="d" data-riddler-option-description="adult">18.</dd>),
+        ~s(<p class="d" data-riddler-option-description="adult">18 and over.</p>)
+      ],
+      "a list attribute names a datalist in the markup" => [
+        ~s(<input class="a" list="missing"/>),
+        ~s(<p id="o">x</p><input class="a" list="o"/>),
+        ~s(<input class="a" list=""/>)
+      ],
+      "a slider carries a min and a max" => [
+        ~s(<input class="a" type="range"/>),
+        ~s(<input class="a" type="range" min="1"/>),
+        ~s(<input class="a" type="range" max="10"/>)
       ]
     }
 
@@ -311,15 +366,52 @@ defmodule RiddlerLiveView.AccessibilityTest do
       |> Enum.reject(fn [_for, text] -> String.trim(text) == "" end)
       |> Enum.map(&hd/1)
 
-    ~r/<input\b([^>]*)>/
+    texts = labelling_texts(html)
+
+    ~r/<(?:input|textarea)\b([^>]*)>/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.reject(fn attrs -> select_named?(attrs, labels, texts) end)
+  end
+
+  # Sabotage: drop the description id from the option input's aria-describedby.
+  defp option_description_named(html) do
+    named =
+      ~r/aria-describedby="([^"]*)"/
+      |> Regex.scan(html, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.flat_map(&String.split/1)
+
+    ~r/<[a-z]+\b([^>]*\sdata-riddler-option-description="[^"]*"[^>]*)>/
     |> Regex.scan(html, capture: :all_but_first)
     |> List.flatten()
     |> Enum.reject(fn attrs ->
       case Regex.run(~r/\sid="([^"]+)"/, attrs) do
-        [_, id] -> id in labels
+        [_, id] -> id in named
         nil -> false
       end
     end)
+  end
+
+  # Sabotage: name the datalist by an id the searchable input's list does not carry.
+  defp list_names_datalist(html) do
+    datalists =
+      ~r/<datalist\b[^>]*\sid="([^"]+)"/
+      |> Regex.scan(html, capture: :all_but_first)
+      |> List.flatten()
+
+    ~r/<input\b[^>]*\slist="([^"]*)"/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.reject(&(&1 in datalists))
+  end
+
+  # Sabotage: drop max from the slider's input.
+  defp slider_bounded(html) do
+    ~r/<input\b([^>]*\stype="range"[^>]*)>/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.reject(&(&1 =~ ~r/\smin="[^"]+"/ and &1 =~ ~r/\smax="[^"]+"/))
   end
 
   # Sabotage: name the secret question's held paragraph by an id it does not carry.
@@ -374,16 +466,33 @@ defmodule RiddlerLiveView.AccessibilityTest do
       |> Enum.reject(fn [_for, text] -> String.trim(text) == "" end)
       |> Enum.map(&hd/1)
 
-    texts =
-      ~r{<([a-z0-9]+)\b[^>]*\sid="([^"]+)"[^>]*>(.*?)</\1>}s
-      |> Regex.scan(html, capture: :all_but_first)
-      |> Enum.reject(fn [tag, _id, text] -> tag == "select" or String.trim(text) == "" end)
-      |> Enum.map(fn [_tag, id, _text] -> id end)
+    texts = labelling_texts(html)
 
     ~r/<select\b([^>]*)>/
     |> Regex.scan(html, capture: :all_but_first)
     |> List.flatten()
     |> Enum.reject(fn attrs -> select_named?(attrs, labels, texts) end)
+  end
+
+  # The ids of the elements whose text can name a form control.
+  defp labelling_texts(html) do
+    ~r{<([a-z0-9]+)\b[^>]*\sid="([^"]+)"[^>]*>(.*?)</\1>}s
+    |> Regex.scan(html, capture: :all_but_first)
+    |> Enum.reject(fn [tag, _id, text] ->
+      tag in ~w(select textarea) or String.trim(text) == ""
+    end)
+    |> Enum.map(fn [_tag, id, _text] -> id end)
+  end
+
+  defp described_options do
+    [
+      %{
+        "value" => "adult",
+        "label" => "Adult card",
+        "description" => "For patrons of 18 and over."
+      },
+      %{"value" => "child", "label" => "Child card"}
+    ]
   end
 
   defp select_named?(attrs, labels, texts) do
