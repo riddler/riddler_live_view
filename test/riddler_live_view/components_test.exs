@@ -628,6 +628,30 @@ defmodule RiddlerLiveView.ComponentsTest do
       end
     end
 
+    # Mutation: answer true from whole_bounds?/1 whatever the bounds - goes red.
+    test "draws a slider or a stepper under integer with a bound that is not whole as with no style" do
+      for element <- [
+            Map.merge(@holds, %{"min" => 0.5, "max" => 9.5, "step" => 1}),
+            Map.put(@holds, "max", 9.5),
+            %{@holds | "style" => "stepper", "min" => 0.5} |> Map.delete("max"),
+            %{@holds | "style" => "stepper", "max" => 9.5}
+          ] do
+        attrs = element |> text_question_html() |> input_attrs()
+        assert attrs =~ ~r/^ type="text"/
+        refute attrs =~ ~r/\s(min|max|step)=/
+      end
+
+      for element <- [
+            Map.merge(@holds, %{"min" => 1.0, "max" => 10.0}),
+            %{@holds | "style" => "stepper", "min" => 1.0}
+          ] do
+        refute element |> text_question_html() |> input_attrs() =~ ~s(type="text")
+      end
+
+      under_number = Map.merge(@holds, %{"format" => "number", "min" => 0.5, "max" => 9.5})
+      assert under_number |> text_question_html() |> input_attrs() =~ ~r/^ type="range"/
+    end
+
     # Mutation: drop the "any" step for the number format - goes red.
     test "draws a stepper as a number input, by any step under number and by one under integer" do
       stepper = %{@holds | "style" => "stepper"} |> Map.delete("max")
