@@ -541,6 +541,14 @@ defmodule RiddlerLiveView.Components do
       `<input type="number">` carrying the numeric `"min"` and `"max"` it has
       and the question's `"step"`.
 
+  The browser steps a range or a number input from its `min`, so under
+  `"integer"` a slider or a stepper is drawn only where every numeric bound
+  is a whole number, an integer or a float with no fractional part: from a
+  bound such as `0.5` it would offer only values riddler refuses as
+  `response.format`, and a range input always submits one. A slider or a
+  stepper with a bound that is not whole is drawn as the question with no
+  style.
+
   A slider or a stepper with no `"step"` moves by one under `"integer"`, the
   browser's default, and by any amount under `"number"`, `step="any"`.
   riddler does not read the step when it validates, so the step the browser
@@ -1654,8 +1662,9 @@ defmodule RiddlerLiveView.Components do
   #   * `"multiline"` is a textarea under no format and under `"pattern"`;
   #   * `"slider"` is a range input under `"integer"` and `"number"` where
   #     both bounds are numbers, since a range input with no bounds holds
-  #     the visitor between 0 and 100;
-  #   * `"stepper"` is a number input under `"integer"` and `"number"`;
+  #     the visitor between 0 and 100, and under `"integer"` whole numbers;
+  #   * `"stepper"` is a number input under `"integer"` and `"number"`, and
+  #     under `"integer"` only where every numeric bound is a whole number;
   #   * a `"date"` or `"time"` format is the browser's own input for it.
   #
   # Every other style, and every style under another format, is drawn as the
@@ -1667,13 +1676,17 @@ defmodule RiddlerLiveView.Components do
       else: text_drawn_as(Map.delete(element, "style"))
   end
 
-  defp text_drawn_as(%{"style" => "slider", "format" => format, "min" => min, "max" => max})
-       when format in ["integer", "number"] and is_number(min) and is_number(max),
-       do: :slider
+  defp text_drawn_as(
+         %{"style" => "slider", "format" => format, "min" => min, "max" => max} = element
+       )
+       when format in ["integer", "number"] and is_number(min) and is_number(max) do
+    if whole_bounds?(element), do: :slider, else: :field
+  end
 
-  defp text_drawn_as(%{"style" => "stepper", "format" => format})
-       when format in ["integer", "number"],
-       do: :stepper
+  defp text_drawn_as(%{"style" => "stepper", "format" => format} = element)
+       when format in ["integer", "number"] do
+    if whole_bounds?(element), do: :stepper, else: :field
+  end
 
   defp text_drawn_as(%{"format" => "date"}), do: :date
   defp text_drawn_as(%{"format" => "time"}), do: :time
@@ -1731,6 +1744,19 @@ defmodule RiddlerLiveView.Components do
   # first newline there: a presented value that opens on a newline keeps it.
   defp textarea_value(nil), do: "\n"
   defp textarea_value(value), do: "\n" <> to_string(value)
+
+  # The browser steps a range or number input from its min, so under
+  # `"integer"` a bound with a fraction would offer only values riddler
+  # refuses as `response.format`: there every numeric bound must be a whole
+  # number, an integer or a float with no fractional part.
+  defp whole_bounds?(%{"format" => "integer"} = element) do
+    Enum.all?([element["min"], element["max"]], &(not is_number(&1) or whole?(&1)))
+  end
+
+  defp whole_bounds?(_element), do: true
+
+  defp whole?(number) when is_integer(number), do: true
+  defp whole?(number), do: trunc(number) == number
 
   defp number_or_nil(value) when is_number(value), do: value
   defp number_or_nil(_value), do: nil
