@@ -28,6 +28,16 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"heading level 4", heading(4, "Your library card")},
       {"heading with blank text", heading(2, " ")},
       {"text", text("Bring a proof of address to the branch.")},
+      {"text, caption", text("Bring a proof of address to the branch.", "caption")},
+      {"image", image(%{})},
+      {"image, decorative, with size and fit",
+       image(%{"alt" => "", "size" => "banner", "fit" => "contain"})},
+      {"image, a data: image", image(%{"src" => "data:image/png;base64,iVBORw0KGgo="})},
+      {"divider", divider()},
+      {"link", link_html(%{})},
+      {"link, host-relative, styled as a button",
+       link_html(%{"href" => "/branches/riverside", "style" => "button"})},
+      {"frame around an image, a divider, a link and a button", displayed()},
       {"frame around a level 1 heading and a text", composed()},
       {"text question", text_question(%{})},
       {"text question, required, with help and a value",
@@ -116,7 +126,11 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"every button says its type", &button_typed/1},
       {"aria-invalid only on a form control that names a finding", &invalid_names_finding/1},
       {"focus moves only to a finding in the markup that can take it", &focus_reaches_finding/1},
-      {"a disabled button names text that says why", &disabled_button_says_why/1}
+      {"a disabled button names text that says why", &disabled_button_says_why/1},
+      {"every image carries an alt attribute", &image_has_alt/1},
+      {"every link has an href and text", &link_has_href_and_text/1},
+      {"a link submits nothing and raises no outcome", &link_submits_nothing/1},
+      {"a divider is an hr that keeps its separator role", &divider_is_separator/1}
     ]
   end
 
@@ -135,7 +149,11 @@ defmodule RiddlerLiveView.AccessibilityTest do
     "every button says its type",
     "aria-invalid only on a form control that names a finding",
     "focus moves only to a finding in the markup that can take it",
-    "a disabled button names text that says why"
+    "a disabled button names text that says why",
+    "every image carries an alt attribute",
+    "every link has an href and text",
+    "a link submits nothing and raises no outcome",
+    "a divider is an hr that keeps its separator role"
   ]
 
   for name <- @rule_names do
@@ -232,6 +250,28 @@ defmodule RiddlerLiveView.AccessibilityTest do
         ~s(<button class="a" type="submit" disabled aria-describedby="n">Continue</button>),
         ~s(<p id="n" class="n"> </p><button class="a" type="submit" disabled aria-describedby="n">Go</button>),
         ~s(<p id="n" class="n">Why.</p><button class="a" type="submit" disabled aria-describedby="">Go</button>)
+      ],
+      "every image carries an alt attribute" => [
+        ~s(<img src="/a.png" class="a">),
+        ~s(<img src="/a.png" class="a" data-alt="">),
+        ~s(<img src="/a.png" class="a" alt="Riverside"><img src="/b.png" class="b">)
+      ],
+      "every link has an href and text" => [
+        ~s(<a class="a">Rules</a>),
+        ~s(<a class="a" href="">Rules</a>),
+        ~s(<a class="a" href="/rules"> </a>),
+        ~s(<a class="a" href="/rules"><span></span></a>)
+      ],
+      "a link submits nothing and raises no outcome" => [
+        ~s(<a class="a" href="/r" phx-click="submit">Rules</a>),
+        ~s(<a class="a" href="/r" name="outcome" value="rules_read">Rules</a>),
+        ~s(<button class="b" type="submit"><a class="a" href="/r">Rules</a></button>),
+        ~s(<a class="a" href="/r" data-riddler-outcome="rules_read">Rules</a>)
+      ],
+      "a divider is an hr that keeps its separator role" => [
+        ~s(<hr class="a" role="presentation">),
+        ~s(<hr class="a" aria-hidden="true">),
+        ~s(<div class="a" data-riddler-element="divider"></div>)
       ]
     }
 
@@ -472,6 +512,59 @@ defmodule RiddlerLiveView.AccessibilityTest do
     end)
   end
 
+  # Sabotage: draw the image's alt only where it is not empty.
+  defp image_has_alt(html) do
+    ~r/<img\b([^>]*)>/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.reject(&(&1 =~ ~r/\salt="[^"]*"/))
+  end
+
+  # Sabotage: draw the link with no text.
+  defp link_has_href_and_text(html) do
+    ~r{<a\b([^>]*)>(.*?)</a>}s
+    |> Regex.scan(html, capture: :all_but_first)
+    |> Enum.reject(fn [attrs, text] ->
+      attrs =~ ~r/\shref="[^"\s][^"]*"/ and
+        text |> String.replace(~r/<[^>]*>/, "") |> String.trim() != ""
+    end)
+  end
+
+  # Sabotage: give the link a phx-click that pushes its key as an outcome.
+  defp link_submits_nothing(html) do
+    links =
+      ~r/<a\b([^>]*)>/
+      |> Regex.scan(html, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.filter(&(&1 =~ ~r/\s(?:phx-[a-z-]+|name|value|type|form|formaction)=|outcome/))
+
+    nested =
+      ~r{<button\b[^>]*>(?:(?!</button>).)*<a\b}s
+      |> Regex.scan(html)
+      |> List.flatten()
+
+    links ++ nested
+  end
+
+  # Sabotage: draw the divider as a <div>.
+  defp divider_is_separator(html) do
+    hrs =
+      ~r/<hr\b([^>]*)>/
+      |> Regex.scan(html, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.filter(fn attrs ->
+        (attrs =~ ~r/\srole="/ and not (attrs =~ ~s( role="separator"))) or
+          attrs =~ ~s( aria-hidden="true")
+      end)
+
+    not_hr =
+      ~r/<(?!hr\b)([a-z0-9]+)\b[^>]*\sdata-riddler-element="divider"/
+      |> Regex.scan(html)
+      |> List.flatten()
+
+    hrs ++ not_hr
+  end
+
   defp finding(code, element_key, author_message \\ nil) do
     %{
       "code" => code,
@@ -621,9 +714,92 @@ defmodule RiddlerLiveView.AccessibilityTest do
     rendered_to_string(~H"<Components.heading element={@element} />")
   end
 
-  defp text(text) do
-    assigns = %{element: %{"key" => "address_note", "text" => text}}
+  defp text(text, style \\ nil) do
+    assigns = %{element: %{"key" => "address_note", "text" => text, "style" => style}}
     rendered_to_string(~H"<Components.text element={@element} />")
+  end
+
+  defp image(fields) do
+    element =
+      Map.merge(
+        %{
+          "type" => "image",
+          "key" => "branch_photo",
+          "src" => "https://library.example.org/branches/riverside.png",
+          "alt" => "The front of the Riverside branch"
+        },
+        fields
+      )
+
+    assigns = %{element: element}
+    rendered_to_string(~H"<Components.image element={@element} />")
+  end
+
+  defp divider do
+    assigns = %{element: %{"type" => "divider", "key" => "details_rule"}}
+    rendered_to_string(~H"<Components.divider element={@element} />")
+  end
+
+  defp link_html(fields) do
+    element =
+      Map.merge(
+        %{
+          "type" => "link",
+          "key" => "lending_rules",
+          "label" => "Read the lending rules",
+          "href" => "https://library.example.org/lending-rules"
+        },
+        fields
+      )
+
+    assigns = %{element: element}
+    rendered_to_string(~H"<Components.link element={@element} />")
+  end
+
+  defp displayed do
+    assigns = %{
+      screen: %{
+        "key" => "details",
+        "title" => "Patron registration",
+        "elements" => [
+          %{
+            "type" => "image",
+            "key" => "branch_photo",
+            "src" => "/images/riverside.png",
+            "alt" => "",
+            "size" => "banner"
+          },
+          %{"type" => "divider", "key" => "details_rule"},
+          %{
+            "type" => "link",
+            "key" => "lending_rules",
+            "label" => "Read the lending rules",
+            "href" => "/lending-rules",
+            "style" => "inline"
+          },
+          %{
+            "type" => "text",
+            "key" => "address_note",
+            "text" => "Bring a proof of address.",
+            "style" => "caption"
+          },
+          %{
+            "type" => "button",
+            "key" => "details_continue",
+            "label" => "Continue",
+            "outcome" => "details_submitted"
+          }
+        ]
+      },
+      moves: %{"outcomes" => ["details_submitted"], "back" => true}
+    }
+
+    rendered_to_string(~H"""
+    <Components.frame screen={@screen}>
+      <Components.elements screen={@screen} moves={@moves} />
+      <Components.back screen={@screen} moves={@moves} />
+    </Components.frame>
+    """)
   end
 
   defp text_question(fields, findings \\ []) do

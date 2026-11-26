@@ -10,6 +10,7 @@ defmodule RiddlerLiveView.ElementsTest do
   import Phoenix.Component
   import Phoenix.LiveViewTest, only: [rendered_to_string: 1]
 
+  alias Riddler.Screens.Document
   alias RiddlerLiveView.Components
 
   @moves %{"outcomes" => ["details_submitted", "card_type_changed"], "back" => true}
@@ -137,6 +138,108 @@ defmodule RiddlerLiveView.ElementsTest do
 
       assert kinds_drawn(html) == ["button"]
       assert html =~ ~s(data-riddler-key="details_continue")
+    end
+  end
+
+  describe "elements/1 with the display kinds riddler 0.9 presents" do
+    @document %{
+      "schema_version" => 2,
+      "id" => "patron_registration",
+      "screens" => [
+        %{
+          "key" => "patron_details",
+          "title" => "Get your library card",
+          "elements" => [
+            %{
+              "type" => "image",
+              "key" => "branch_photo",
+              "src" => "/images/riverside.png",
+              "alt" => "",
+              "size" => "banner",
+              "fit" => "contain"
+            },
+            %{
+              "type" => "text",
+              "key" => "address_note",
+              "text" => "Bring a proof of address.",
+              "style" => "caption"
+            },
+            %{"type" => "divider", "key" => "details_rule"},
+            %{
+              "type" => "link",
+              "key" => "lending_rules",
+              "label" => "Read the lending rules",
+              "href" => "https://library.example.org/lending-rules",
+              "style" => "inline"
+            },
+            %{
+              "type" => "text_question",
+              "key" => "birth_date",
+              "label" => "Date of birth",
+              "format" => "date",
+              "style" => "multiline",
+              "accessible_label" => "Your date of birth"
+            },
+            %{
+              "type" => "button",
+              "key" => "details_continue",
+              "label" => "Continue",
+              "outcome" => "details_submitted"
+            }
+          ]
+        }
+      ]
+    }
+
+    defp presented do
+      document = Document.admit(@document)
+      {:ok, answer} = Riddler.Journey.present(document, {:screen, "patron_details"}, %{})
+      answer
+    end
+
+    defp presented_html(answer) do
+      assigns = %{screen: answer["screen"], moves: answer["moves"]}
+
+      rendered_to_string(~H"""
+      <Components.elements screen={@screen} moves={@moves} />
+      """)
+    end
+
+    # Mutation: drop the image, divider and link from the package's kinds - goes red.
+    test "draws an image, a divider and a link riddler presents, and blocks nothing" do
+      answer = presented()
+      html = presented_html(answer)
+
+      assert kinds_drawn(html) == ~w(image text divider link text_question button)
+      assert Components.unknown_kinds(answer["screen"]) == []
+      refute html =~ "data-riddler-unknown"
+      refute html =~ "disabled"
+      assert html =~ ~s(alt="")
+      assert html =~ ~s(class="riddler-text riddler-text-caption")
+    end
+
+    # Mutation: draw the link as a submit button carrying its key as the outcome - goes red.
+    test "draws the link outside the moves: one submit, the button's" do
+      answer = presented()
+      html = presented_html(answer)
+
+      assert answer["moves"]["outcomes"] == ["details_submitted"]
+
+      assert [~s(value="details_submitted")] =
+               Regex.scan(~r/value="[^"]*"/, html) |> List.flatten()
+
+      assert [_] = Regex.scan(~r/type="submit"/, html)
+      assert [_, link] = Regex.run(~r{(<a\b[^>]*>)}, html)
+      refute link =~ ~r/\s(?:phx-[a-z-]+|name|value|type|form)=/
+    end
+
+    # Mutation: take the input type from the format as written - goes red.
+    test "draws a question carrying a 0.9 format, hint and accessible label as before" do
+      html = presented_html(presented())
+
+      assert html =~ ~r/<input type="text" id="riddler-element-birth_date"/
+      refute html =~ "multiline"
+      refute html =~ "Your date of birth"
     end
   end
 

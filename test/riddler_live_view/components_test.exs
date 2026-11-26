@@ -153,7 +153,7 @@ defmodule RiddlerLiveView.ComponentsTest do
     # Mutation: render the text in a <div> - goes red.
     test "renders the text as a paragraph" do
       assert text_html(@text) =~
-               ~r{^<p class="riddler-text" data-riddler-element="text" data-riddler-key="reminder_note">\s*We send due-date reminders to this address.\s*</p>$}
+               ~r{^<p class="riddler-text riddler-text-body" data-riddler-element="text" data-riddler-key="reminder_note">\s*We send due-date reminders to this address.\s*</p>$}
     end
 
     # Mutation: render the text with raw/1 - goes red.
@@ -166,7 +166,174 @@ defmodule RiddlerLiveView.ComponentsTest do
 
     # Mutation: drop @class from the paragraph's class list - goes red.
     test "adds a host's classes to its own" do
-      assert text_html(@text, "note") =~ ~s(class="riddler-text note")
+      assert text_html(@text, "note") =~ ~s(class="riddler-text riddler-text-body note")
+    end
+  end
+
+  describe "text/1 with a style" do
+    # Mutation: draw every text with the body class - goes red.
+    test "draws the style as a class: caption, or body for body, none and any other" do
+      assert text_html(Map.put(@text, "style", "caption")) =~
+               ~s(class="riddler-text riddler-text-caption")
+
+      for style <- ["body", nil, "footnote", 3] do
+        html = text_html(Map.put(@text, "style", style))
+        assert html =~ ~s(class="riddler-text riddler-text-body")
+        refute html =~ "riddler-text-caption"
+        refute html =~ "data-riddler-style"
+      end
+    end
+  end
+
+  describe "image/1" do
+    @branch_photo %{
+      "type" => "image",
+      "key" => "branch_photo",
+      "src" => "https://library.example.org/branches/riverside.png",
+      "alt" => "The front of the Riverside branch",
+      "size" => "medium",
+      "fit" => "cover"
+    }
+
+    defp image_html(element, class \\ nil) do
+      assigns = %{element: element, class: class}
+      rendered_to_string(~H"<Components.image element={@element} class={@class} />")
+    end
+
+    # Mutation: render the image in a <figure> with no <img> - goes red.
+    test "renders an img with its src, alt, size and fit" do
+      assert image_html(@branch_photo) ==
+               ~s(<img src="https://library.example.org/branches/riverside.png" alt="The front of the Riverside branch" class="riddler-image" data-riddler-element="image" data-riddler-key="branch_photo" data-riddler-size="medium" data-riddler-fit="cover">)
+    end
+
+    # Mutation: draw alt={present_text(@element["alt"])}, dropping an empty alt - goes red.
+    test "draws alt=\"\" for a decorative image, and for an alt that is not a string" do
+      for alt <- ["", nil] do
+        html = image_html(Map.put(@branch_photo, "alt", alt))
+        assert [_, attrs] = Regex.run(~r{<img([^>]*)>}, html)
+        assert attrs =~ ~r/\salt=""(?=\s|\z)/
+      end
+    end
+
+    # Mutation: carry size and fit whatever their shape - goes red.
+    test "carries size and fit only where they are strings" do
+      html = image_html(Map.drop(@branch_photo, ["size", "fit"]))
+      refute html =~ "data-riddler-size"
+      refute html =~ "data-riddler-fit"
+
+      html = image_html(%{@branch_photo | "size" => 4, "fit" => %{}})
+      refute html =~ "data-riddler-size"
+      refute html =~ "data-riddler-fit"
+    end
+
+    # Mutation: render the image whatever its src - goes red.
+    test "renders nothing for an image with no src" do
+      assert image_html(Map.delete(@branch_photo, "src")) == ""
+      assert image_html(%{@branch_photo | "src" => " "}) == ""
+    end
+
+    # Mutation: draw a data: image only where it begins https - goes red.
+    test "draws a src riddler presents as written, a host-relative and a data: image" do
+      for src <- ["/images/riverside.png", "data:image/png;base64,iVBORw0KGgo="] do
+        assert image_html(%{@branch_photo | "src" => src}) =~ ~s(src="#{src}")
+      end
+    end
+
+    # Mutation: render the alt with raw/1 - goes red.
+    test "escapes the alt and the src" do
+      html = image_html(%{@branch_photo | "alt" => "\"><b>Ada</b>", "src" => "/a?b=1&c=2"})
+      refute html =~ "<b>"
+      assert html =~ ~s(alt="&quot;&gt;&lt;b&gt;Ada&lt;/b&gt;")
+      assert html =~ ~s(src="/a?b=1&amp;c=2")
+    end
+
+    # Mutation: drop @class from the image's class list - goes red.
+    test "adds a host's classes to its own" do
+      assert image_html(@branch_photo, "photo") =~ ~s(class="riddler-image photo")
+    end
+  end
+
+  describe "divider/1" do
+    @rule %{"type" => "divider", "key" => "details_rule"}
+
+    defp divider_html(element, class \\ nil) do
+      assigns = %{element: element, class: class}
+      rendered_to_string(~H"<Components.divider element={@element} class={@class} />")
+    end
+
+    # Mutation: render the divider as a <div> - goes red.
+    test "renders an hr" do
+      assert divider_html(@rule) ==
+               ~s(<hr class="riddler-divider" data-riddler-element="divider" data-riddler-key="details_rule">)
+    end
+
+    # Mutation: drop @class from the rule's class list - goes red.
+    test "adds a host's classes to its own" do
+      assert divider_html(@rule, "faint") =~ ~s(class="riddler-divider faint")
+    end
+  end
+
+  describe "link/1" do
+    @lending_rules %{
+      "type" => "link",
+      "key" => "lending_rules",
+      "label" => "Read the lending rules",
+      "href" => "https://library.example.org/lending-rules",
+      "style" => "inline"
+    }
+
+    defp link_html(element, class \\ nil) do
+      assigns = %{element: element, class: class}
+      rendered_to_string(~H"<Components.link element={@element} class={@class} />")
+    end
+
+    # Mutation: render the link as a <button> - goes red.
+    test "renders an a whose href is the link's and whose text is its label" do
+      assert link_html(@lending_rules) =~
+               ~r{^<a href="https://library.example.org/lending-rules" class="riddler-link" data-riddler-element="link" data-riddler-key="lending_rules" data-riddler-style="inline">\s*Read the lending rules\s*</a>$}
+    end
+
+    # Mutation: add phx-click={JS.push("submit", value: %{"outcome" => @element["key"]})} to the a - goes red.
+    test "never submits and raises no outcome" do
+      html = link_html(@lending_rules)
+      assert [_, attrs] = Regex.run(~r{<a([^>]*)>}, html)
+
+      refute attrs =~ "phx-"
+      refute attrs =~ ~r/\s(?:name|value|type|form|formaction|onclick)=/
+      refute attrs =~ "outcome"
+      refute html =~ ~r/<(?:button|input|form)\b/
+    end
+
+    # Mutation: carry the style whatever its shape - goes red.
+    test "carries the style as a data attribute only where it is a string" do
+      refute link_html(Map.delete(@lending_rules, "style")) =~ "data-riddler-style"
+      refute link_html(%{@lending_rules | "style" => 2}) =~ "data-riddler-style"
+      assert link_html(%{@lending_rules | "style" => "button"}) =~ ~s(data-riddler-style="button")
+    end
+
+    # Mutation: render the link whatever its label - goes red.
+    test "renders nothing for a link with a blank label or no href" do
+      assert link_html(%{@lending_rules | "label" => " "}) == ""
+      assert link_html(Map.delete(@lending_rules, "href")) == ""
+    end
+
+    # Mutation: draw a host-relative href as an absolute one - goes red.
+    test "draws a host-relative href as riddler presents it" do
+      assert link_html(%{@lending_rules | "href" => "/branches/riverside"}) =~
+               ~s(href="/branches/riverside")
+    end
+
+    # Mutation: render the label with raw/1 - goes red.
+    test "escapes the label and the href" do
+      html = link_html(%{@lending_rules | "label" => "<b>Rules</b>", "href" => "/r?a=1&b=2"})
+      refute html =~ "<b>"
+      assert html =~ "&lt;b&gt;Rules&lt;/b&gt;"
+      assert html =~ ~s(href="/r?a=1&amp;b=2")
+    end
+
+    # Mutation: drop @class from the link's class list - goes red.
+    test "adds a host's classes to its own" do
+      assert link_html(@lending_rules, "rules") =~ ~s(class="riddler-link rules")
     end
   end
 

@@ -82,12 +82,13 @@ defmodule RiddlerLiveView.MixProject do
   # sees at one step of a Journey and `phoenix_live_view` renders it. Nothing
   # in the statifier family is a dependency here and nothing here may become
   # one: a host wires its execution engine to this package, not the reverse.
-  # The floor on `riddler` is 0.8, the first release whose presented screen
-  # names its children `elements`.
+  # The floor on `riddler` is 0.9, the first release whose presented screen
+  # carries the `image`, `divider` and `link` elements and a text's `style`,
+  # each of which a component here draws.
   defp deps do
     [
       # Runtime
-      {:riddler, "~> 0.8"},
+      {:riddler, "~> 0.9"},
       {:phoenix_live_view, "~> 1.2"},
 
       # Dev / test

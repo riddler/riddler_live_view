@@ -83,7 +83,7 @@ attributes on every component; the package ships no stylesheet.
 ## Compatibility
 
 RiddlerLiveView needs Elixir 1.18 or later (`elixir: "~> 1.18"`). It has two
-runtime dependencies: [riddler](https://hex.pm/packages/riddler) `~> 0.8`,
+runtime dependencies: [riddler](https://hex.pm/packages/riddler) `~> 0.9`,
 which presents each step of a Journey, and
 [phoenix_live_view](https://hex.pm/packages/phoenix_live_view) `~> 1.2`,
 which renders it. Nothing in the statifier family is a dependency: a host
