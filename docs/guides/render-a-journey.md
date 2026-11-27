@@ -200,7 +200,9 @@ for the phone format, `type="date"` and `type="time"` for the date and time
 formats, and carries `required` where the question does. A date or time input
 carries the question's `min` and `max`, and what it submits is already in
 riddler's shape for the format, so your host passes it on as it comes. A
-datetime question is drawn as a plain text input. A slider or a stepper
+datetime question is drawn as a datetime-local input where you pass the
+visitor's time zone, and as a plain text input where you do not; the next
+section says how. A slider or a stepper
 carries its bounds and step. No other input sets a `pattern`, `min` or
 `max`, but the browser's own checks for the type, the bounds and `required`
 still run, and can stop a submit with the browser's own message before your
@@ -211,6 +213,50 @@ inside a form of its own, and adds `novalidate` there: the form
 declares `validates: false` carries `formnovalidate`, so the browser's checks
 do not stop it; [Offer an authored skip](offer-an-authored-skip.md) shows
 one.
+
+## Give the visitor's time zone for a datetime question
+
+riddler's datetime format is an instant: a date and a time, then `Z` or an
+offset such as `-07:00`. The browser's datetime-local input shows and
+submits a wall time with no offset, which riddler refuses. Pass the
+visitor's time zone, and the component does the conversion both ways:
+
+```heex
+<.live_component
+  module={RiddlerLiveView.Journey}
+  id="pickup"
+  journey={@journey}
+  host={Library.PickupHost}
+  access={Library.PatronAccess}
+  actor={@patron_id}
+  time_zone={@patron_time_zone}
+/>
+```
+
+`time_zone` is a zone name, such as `"America/Denver"`, that your
+application's time zone database resolves. Elixir's default database knows
+only `"Etc/UTC"`, so configure one in your application, for example the
+`tz` package's, in `config/config.exs`:
+
+```elixir
+config :elixir, :time_zone_database, Tz.TimeZoneDatabase
+```
+
+Where the zone comes from is yours: a patron's saved branch, or the
+browser's own zone sent in the LiveView's connect params.
+
+With a zone in hand the question is drawn as `<input type="datetime-local">`,
+with its presented `min`, `max` and value drawn as the wall times they are in
+that zone. On a submit, the component appends the offset the zone has at the
+submitted moment, so your host's `submit/2` receives `2026-11-27T10:00-07:00`
+for a visitor in Denver who picked 10:00, and `Riddler.Screens.validate_screen/4`
+validates it and holds it to the question's bounds. A wall time the clocks
+skip in spring is read with the offset before the change; one the clocks
+pass twice in autumn is read as the earlier of the two instants.
+
+Without a zone, or with one your database does not resolve, the question
+stays a plain text input and the visitor types the instant in riddler's
+shape.
 
 ## Style it
 

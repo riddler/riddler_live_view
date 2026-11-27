@@ -346,10 +346,10 @@ defmodule RiddlerLiveView.ComponentsTest do
     }
 
     defp text_question_html(element, attrs \\ %{}) do
-      assigns = Map.merge(%{element: element, name: nil, class: nil}, attrs)
+      assigns = Map.merge(%{element: element, name: nil, class: nil, time_zone: nil}, attrs)
 
       rendered_to_string(
-        ~H"<Components.text_question element={@element} name={@name} class={@class} />"
+        ~H"<Components.text_question element={@element} name={@name} class={@class} time_zone={@time_zone} />"
       )
     end
 
@@ -539,16 +539,109 @@ defmodule RiddlerLiveView.ComponentsTest do
       refute html =~ ~r/\s(min|max)=/
     end
 
-    # Mutation: draw the datetime format as a datetime-local input - goes red.
-    test "draws a datetime question as the plain text input it was" do
+    @pickup_at %{
+      "type" => "text_question",
+      "key" => "pickup_at",
+      "label" => "Preferred pickup appointment",
+      "format" => "datetime"
+    }
+
+    # Mutation: draw the datetime format as a datetime-local input whatever the zone - goes red.
+    test "draws a datetime question as a plain text input with no time zone, or one not resolved" do
+      for zone <- [nil, "Mars/Olympus_Mons"] do
+        attrs =
+          @pickup_at
+          |> Map.merge(%{"min" => "2026-11-24T09:00:00-07:00"})
+          |> text_question_html(%{time_zone: zone})
+          |> input_attrs()
+
+        assert attrs =~ ~r/^ type="text"/
+        refute attrs =~ ~r/\s(min|max|step)=/
+      end
+    end
+
+    # Mutation: add the offset to the instant in place of taking it away in LocalTime.utc/1 - goes red.
+    test "draws a datetime question in the visitor's zone, its bounds and value as wall times" do
       attrs =
-        @birth_date
-        |> Map.merge(%{"format" => "datetime", "min" => "2026-11-24T09:00:00-07:00"})
-        |> text_question_html()
+        @pickup_at
+        |> Map.merge(%{
+          "min" => "2026-11-27T16:00Z",
+          "max" => "2026-11-28T01:30-07:00",
+          "value" => "2026-11-27T22:15+05:30"
+        })
+        |> text_question_html(%{time_zone: "America/Denver"})
         |> input_attrs()
 
-      assert attrs =~ ~r/^ type="text"/
-      refute attrs =~ ~r/\s(min|max|step)=/
+      assert attrs =~ ~r/^ type="datetime-local"/
+      assert attrs =~ ~s( min="2026-11-27T09:00")
+      assert attrs =~ ~s( max="2026-11-28T01:30")
+      assert attrs =~ ~s( value="2026-11-27T09:45")
+      refute attrs =~ " step="
+    end
+
+    # Mutation: read every presented instant in standard time, whatever the date - goes red.
+    test "draws a bound in the offset the zone keeps on its own date" do
+      attrs =
+        @pickup_at
+        |> Map.merge(%{
+          "min" => "2026-07-01T16:00Z",
+          "max" => "2026-12-01T16:00Z",
+          "value" => "2026-08-15T18:30Z"
+        })
+        |> text_question_html(%{time_zone: "America/Denver"})
+        |> input_attrs()
+
+      assert attrs =~ ~s( min="2026-07-01T10:00")
+      assert attrs =~ ~s( max="2026-12-01T09:00")
+      assert attrs =~ ~s( value="2026-08-15T12:30")
+    end
+
+    # Mutation: answer nil from datetime_step/1 whatever the values - goes red.
+    test "moves a datetime-local input by the second where a drawn wall time carries seconds" do
+      for extra <- [
+            %{"value" => "2026-11-27T16:00:30Z"},
+            %{"min" => "2026-11-27T16:00:00Z"},
+            %{"max" => "2026-11-27T16:00:59-07:00"}
+          ] do
+        attrs =
+          @pickup_at
+          |> Map.merge(extra)
+          |> text_question_html(%{time_zone: "Etc/UTC"})
+          |> input_attrs()
+
+        assert attrs =~ ~s( step="1")
+        assert attrs =~ ~r/ (value|min|max)="2026-11-2\dT\d\d:\d\d:\d\d"/
+      end
+    end
+
+    # Mutation: draw a presented datetime unchanged where it is not in riddler's shape - goes red.
+    test "draws no datetime value or bound that is not in riddler's datetime shape" do
+      for {min, max} <- [
+            {"2026-11-27T16:00", "2026-11-27T16:00:00.5Z"},
+            {"2026-11-27T16:00+24:00", "2026-11-27T16:00-07:60"},
+            {"2026-02-30T16:00Z", "2026-11-27t16:00z"}
+          ] do
+        attrs =
+          @pickup_at
+          |> Map.merge(%{"min" => min, "max" => max, "value" => 1_764_259_200})
+          |> text_question_html(%{time_zone: "Etc/UTC"})
+          |> input_attrs()
+
+        assert attrs =~ ~r/^ type="datetime-local"/
+        refute attrs =~ ~r/\s(min|max|value|step)=/
+      end
+    end
+
+    # Mutation: drop the four-digit year guard in LocalTime.local/2 - goes red.
+    test "draws no wall time whose year the zone carries past four digits" do
+      attrs =
+        @pickup_at
+        |> Map.merge(%{"max" => "9999-12-31T23:30Z", "min" => "0000-01-01T00:00Z"})
+        |> text_question_html(%{time_zone: "Asia/Kolkata"})
+        |> input_attrs()
+
+      refute attrs =~ " max="
+      assert attrs =~ ~s( min="0000-01-01T05:30")
     end
 
     # Mutation: draw the multiline style as an input - goes red.

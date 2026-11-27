@@ -34,6 +34,13 @@ defmodule RiddlerLiveView.Journey do
       takes, for the host's own element kinds.
     * `finding_text` and `unknown_text` - passed to the components, as
       `RiddlerLiveView.Components` describes them.
+    * `time_zone` - the visitor's time zone, a name the host's configured
+      `Calendar.TimeZoneDatabase` resolves, such as `"America/Denver"`:
+      a datetime question is drawn as a datetime-local input in it, and the
+      offset is added to what the visitor submits, as "A submit" says.
+      Where it is nil, or the host's database does not resolve it, a
+      datetime question is a plain text input and its value is handed on
+      as typed.
     * `waiting_text` and `done_text` - the sentence drawn while the
       execution waits and once it is done.
     * `refused_text` - the sentence drawn in place of a Journey the visitor
@@ -150,6 +157,21 @@ defmodule RiddlerLiveView.Journey do
   question's empty field is left out of the responses, so a value already
   held stays held and an empty one is never handed on.
 
+  A text question of the `"datetime"` format, where a `time_zone` is in
+  hand, is drawn as a datetime-local input, which submits a wall time with
+  no offset, `YYYY-MM-DDTHH:MM` or `YYYY-MM-DDTHH:MM:SS`. The component reads
+  it in the visitor's zone and hands on riddler's datetime: the wall time as
+  submitted with the offset in force in that zone at that moment appended,
+  `+HH:MM` or `-HH:MM`, or `Z` where the offset is zero. A wall time the zone
+  skips, when the clocks go forward, is read with the offset in force before
+  the change, so `02:30` on the morning the clocks in Denver go from `02:00`
+  to `03:00` names the instant the clocks there show as `03:30`. A wall time
+  the zone passes twice, when the clocks go back, is read with the offset in
+  force first, the earlier of the two instants. Anything else under the
+  question's key, an empty field, a value that already carries an offset or
+  one that is not a wall time, is handed on unchanged, for riddler to
+  validate.
+
   A screen carrying an element nothing draws, as
   `RiddlerLiveView.Components.unknown_kinds/2` answers, is refused whatever
   the browser sends. The submit is then checked by
@@ -193,6 +215,7 @@ defmodule RiddlerLiveView.Journey do
   alias Riddler.Journey
   alias Riddler.Journey.Access
   alias RiddlerLiveView.Components
+  alias RiddlerLiveView.LocalTime
 
   @options [
     :id,
@@ -203,6 +226,7 @@ defmodule RiddlerLiveView.Journey do
     :components,
     :finding_text,
     :unknown_text,
+    :time_zone,
     :waiting_text,
     :done_text,
     :refused_text,
@@ -216,6 +240,7 @@ defmodule RiddlerLiveView.Journey do
     components: %{},
     finding_text: %{},
     unknown_text: nil,
+    time_zone: nil,
     waiting_text: "One moment.",
     done_text: "All done.",
     refused_text: "There is nothing to show here.",
@@ -278,7 +303,7 @@ defmodule RiddlerLiveView.Journey do
          submit = %{
            "screen" => screen["key"],
            "outcome" => params["outcome"],
-           "responses" => responses(screen, socket.assigns.components, params)
+           "responses" => responses(screen, socket.assigns, params)
          },
          {:ok, submit} <- Journey.decode_submit(submit),
          {:access, :ok} <- {:access, authorize(socket, :submit)} do
@@ -348,6 +373,7 @@ defmodule RiddlerLiveView.Journey do
             findings={@findings}
             finding_text={@finding_text}
             unknown_text={@unknown_text}
+            time_zone={@time_zone}
             id_prefix={@prefix}
           />
         </Components.frame>
@@ -589,11 +615,27 @@ defmodule RiddlerLiveView.Journey do
 
   # One response per question presented on the screen, read from the form
   # by the question's key; nothing else the form carries is handed on.
-  defp responses(screen, components, params) do
+  defp responses(screen, assigns, params) do
+    zone = LocalTime.zone(assigns.time_zone)
+
     screen["elements"]
     |> List.wrap()
-    |> Enum.flat_map(fn element -> response(element, components, params) end)
+    |> Enum.flat_map(fn element -> response(element, assigns.components, params) end)
+    |> Enum.map(fn {key, value} -> {key, with_offset(screen, key, value, zone)} end)
     |> Map.new()
+  end
+
+  # A datetime question drawn as a datetime-local input submits a wall time;
+  # riddler validates an instant, so the visitor's offset is added to it.
+  defp with_offset(_screen, _key, value, nil), do: value
+
+  defp with_offset(screen, key, value, zone) do
+    if Enum.any?(
+         List.wrap(screen["elements"]),
+         &match?(%{"type" => "text_question", "key" => ^key, "format" => "datetime"}, &1)
+       ),
+       do: LocalTime.instant(value, zone),
+       else: value
   end
 
   defp response(%{"type" => type, "key" => key} = element, _components, params)

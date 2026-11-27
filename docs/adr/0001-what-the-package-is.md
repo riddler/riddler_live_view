@@ -256,3 +256,112 @@ would show for a link to no Journey at all.
 - The anonymous visitor, streaming and the transport, which rd-ADR-0005's
   Amendment of 2026-11-23 leaves open, and a repeating section.
 - An axe-core browser run.
+
+---
+
+## Amendment, 2026-11-26: a datetime question is drawn in the visitor's time zone, which the host supplies
+
+Status: proposed
+
+That the host supplies the visitor's time zone and that this package adds
+the offset, recorded as an Amendment on this record before 0.1.0, was ruled
+by the operator, 2026-11-26. riddler is unchanged by it. The shape of the
+attribute, where the offset is added, what is drawn with no zone, and how a
+wall time the clocks skip or pass twice is read are this entry's own,
+written 2026-11-26 at `proposed`.
+
+Every cite of riddler here is of the riddler-ex repository at the tag
+`v0.9.0`, the commit published on Hex as riddler 0.9.0. The code this entry
+describes is not on `main` when it is written, so it is cited by module and
+function name, not by commit.
+
+### Context
+
+riddler's `datetime` format is an instant: a date and a time joined by `T`,
+then `Z` or an offset `+HH:MM` or `-HH:MM`, with no fraction of a second
+(rd-ADR-0002's Amendment of 2026-11-24, "`image`, `divider` and `link`, the
+URL rule, the date and time formats, the hints and an accessible label",
+"The date and time formats"). A presented `min`, `max` or value of that
+format carries its offset too. The browser's `<input type="datetime-local">`
+shows and submits a wall time with no offset, `2026-11-27T10:00`, which
+riddler refuses as `response.format`, and its `min`, `max` and `value`
+attributes take no offset either. Until this entry a datetime question was
+drawn as a plain text input in which the visitor typed the instant.
+
+### What the record now decides
+
+**The attribute.** `RiddlerLiveView.Journey` takes a `time_zone` assign,
+and `RiddlerLiveView.Components.text_question/1` and
+`RiddlerLiveView.Components.elements/1` take a `time_zone` attribute: the
+visitor's time zone as a zone name, such as `"America/Denver"`, which the
+package resolves through the time zone database the host has configured
+(`Calendar.get_time_zone_database/0`). The package adds no time zone
+database and no dependency for one. A zone name rather than a fixed offset,
+because the offset a zone keeps changes across a daylight saving change, and
+the moment a visitor picks can fall on the other side of one from the moment
+the screen is drawn.
+
+**What is drawn.** With a zone the host's database resolves, a
+`text_question` of the `datetime` format is drawn as
+`<input type="datetime-local">`. Its presented `min`, `max` and value are
+each read as the instant they name and drawn as the wall time that instant
+is in the zone, `YYYY-MM-DDTHH:MM`, or `YYYY-MM-DDTHH:MM:SS` where the
+presented text carries seconds; the input moves by the second, `step="1"`,
+where any of them carries seconds. A presented value or bound not in
+riddler's datetime shape, or whose wall time in the zone falls outside the
+four-digit years the input takes, is not drawn. The same conversion draws a value
+riddler presents again, a response already given included.
+
+**Where the offset is added.** In `RiddlerLiveView.Journey`, on the submit,
+before `Riddler.Journey.decode_submit/1` and the host's `submit/2`: the
+response under the key of a presented `text_question` of the `datetime`
+format, where it is a wall time the browser submits (`YYYY-MM-DDTHH:MM` or
+`YYYY-MM-DDTHH:MM:SS`, a date that exists), is read in the zone and handed
+on as riddler's datetime, the wall time as submitted with the offset in
+force in the zone at that moment appended: `+HH:MM` or `-HH:MM`, or `Z`
+where the offset is zero. No fraction of a second is written. Anything else
+under that key, an empty field, a value that already carries an offset, a
+fraction of a second or text that is not a wall time, is handed on
+unchanged for riddler to validate; every other response is handed on as
+before. So riddler validates an instant, and holds it to the question's
+`min` and `max` as it holds any datetime.
+
+**A wall time the clocks skip, and one they pass twice.** A wall time the
+zone skips when its clocks go forward is read with the offset in force
+before the change: it names the instant the clocks show that many minutes
+after the change. A wall time the zone passes twice when its clocks go back
+is read with the offset in force first, the earlier of the two instants.
+Neither is refused: the visitor picked a time the input offered, and a
+refusal would name no field the visitor could correct.
+
+**With no zone.** Where the host passes no `time_zone`, or one its database
+does not resolve (Elixir's default database resolves only `"Etc/UTC"`), a
+datetime question is drawn as the plain text input it was, with no bounds,
+and its value is handed on as typed. The zone is the host's to give; the
+package does not guess one.
+
+### What is unchanged
+
+- riddler, and what it validates: the package writes riddler's shape and
+  riddler reads it.
+- The `date` and `time` formats, drawn and submitted as before.
+- A host's own component, which is called with exactly the assigns it had
+  and is not handed the zone.
+- Decision 1: the zone is the host's value, held as an assign like the
+  host's other options, and nothing a visitor typed is kept.
+
+### Worked example
+
+**Patron registration, a pickup appointment.** A branch library's host
+presents a screen asking a new patron for a preferred pickup appointment,
+a required `text_question` of the `datetime` format with `"min"`
+`"2026-11-27T16:00Z"` and `"max"` `"2026-11-28T01:00Z"`, and embeds the
+Journey with `time_zone="America/Denver"`, the branch's zone. The input is
+drawn with `min="2026-11-27T09:00"` and `max="2026-11-27T18:00"`. The patron
+picks 10:00 on 27 November; the browser submits `2026-11-27T10:00`, and the
+host's `submit/2` receives `2026-11-27T10:00-07:00`, which
+`Riddler.Screens.validate_screen/4` accepts. A patron who picks 08:59 is
+refused by riddler with `response.out_of_range`, drawn beside the question.
+A reminder set for `2026-03-08T02:30`, a time the clocks in Denver skip, is
+handed on as `2026-03-08T02:30-07:00`; one set for `2026-11-01T01:30`, a
+time they pass twice, as `2026-11-01T01:30-06:00`.

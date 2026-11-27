@@ -1130,4 +1130,187 @@ defmodule RiddlerLiveView.JourneyTest do
       Process.cancel_timer(mounted.assigns.retry)
     end
   end
+
+  describe "a datetime question in the visitor's time zone" do
+    # A branch library's pickup appointment: a bounded datetime question,
+    # 09:00 to 18:00 in Denver on 2026-11-27, and an unbounded reminder.
+    @pickup %{
+      "schema_version" => 2,
+      "id" => "card_pickup_booking",
+      "screens" => [
+        %{
+          "key" => "pickup_booking",
+          "title" => "Book your card pickup",
+          "elements" => [
+            %{
+              "type" => "text_question",
+              "key" => "pickup_at",
+              "label" => "Preferred pickup appointment",
+              "required" => true,
+              "format" => "datetime",
+              "min" => "2026-11-27T16:00Z",
+              "max" => "2026-11-28T01:00Z"
+            },
+            %{
+              "type" => "text_question",
+              "key" => "remind_at",
+              "label" => "Remind me at",
+              "format" => "datetime"
+            },
+            %{
+              "type" => "text_question",
+              "key" => "pickup_note",
+              "label" => "Anything the desk should know?"
+            },
+            %{
+              "type" => "choice_question",
+              "key" => "pickup_branch",
+              "label" => "Which branch?",
+              "answer_options" => [
+                %{"value" => "2026-11-27T10:00", "label" => "Riverside"},
+                %{"value" => "central", "label" => "Central"}
+              ]
+            },
+            %{
+              "type" => "button",
+              "key" => "booking_next",
+              "label" => "Book",
+              "outcome" => "pickup_booked"
+            }
+          ]
+        }
+      ]
+    }
+
+    defp mount_booking(zone) do
+      put_engine("J-7", %{
+        document: Document.admit(@pickup),
+        status: {:screen, "pickup_booking"},
+        root: %{}
+      })
+
+      mount_journey(%{journey: "J-7", time_zone: zone})
+    end
+
+    defp book(socket, fields) do
+      params =
+        Map.merge(%{"riddler-screen" => "pickup_booking", "outcome" => "pickup_booked"}, fields)
+
+      socket = event(socket, "submit", params)
+      assert_received {:host, :submit, "J-7", %{"responses" => responses}}
+      {socket, responses}
+    end
+
+    defp held(key), do: get_in(engine("J-7"), [:root, "responses", key])
+
+    # Mutation: hand on the browser's wall time unchanged, no offset added - goes red.
+    test "adds the visitor's offset to the wall time, and riddler validates the instant" do
+      {socket, responses} =
+        mount_booking("America/Denver") |> book(%{"pickup_at" => "2026-11-27T10:00"})
+
+      assert responses["pickup_at"] == "2026-11-27T10:00-07:00"
+      assert socket.assigns.findings == []
+      assert held("pickup_at") == "2026-11-27T10:00-07:00"
+    end
+
+    # Mutation: read every wall time in standard time, whatever the date - goes red.
+    test "adds the offset the zone keeps at the submitted moment, Z where it is zero" do
+      for {zone, wall, written} <- [
+            {"America/Denver", "2026-07-04T14:30:15", "2026-07-04T14:30:15-06:00"},
+            {"Asia/Kolkata", "2026-11-27T21:00", "2026-11-27T21:00+05:30"},
+            {"Etc/UTC", "2026-11-27T16:00", "2026-11-27T16:00Z"}
+          ] do
+        {_socket, responses} =
+          mount_booking(zone)
+          |> book(%{"pickup_at" => "2026-11-27T17:00:00", "remind_at" => wall})
+
+        assert responses["remind_at"] == written
+      end
+    end
+
+    # Mutation: convert the bounds or the wall time with the wrong sign of the offset - goes red.
+    test "holds the visitor to the presented min and max, read in their zone" do
+      for {wall, verdict} <- [
+            {"2026-11-27T08:59", :refused},
+            {"2026-11-27T09:00", :held},
+            {"2026-11-27T18:00", :held},
+            {"2026-11-27T18:01", :refused}
+          ] do
+        {socket, _responses} = mount_booking("America/Denver") |> book(%{"pickup_at" => wall})
+
+        case verdict do
+          :held ->
+            assert socket.assigns.findings == []
+
+          :refused ->
+            assert [%{"element_key" => "pickup_at", "code" => "response.out_of_range"}] =
+                     Enum.map(
+                       socket.assigns.findings,
+                       &%{"element_key" => &1.element_key, "code" => &1.code}
+                     )
+        end
+      end
+    end
+
+    # Mutation: read a skipped wall time with the offset after the gap - goes red.
+    test "reads a wall time the clocks skip with the offset in force before the change" do
+      {_socket, responses} =
+        mount_booking("America/Denver")
+        |> book(%{"pickup_at" => "2026-11-27T10:00", "remind_at" => "2026-03-08T02:30"})
+
+      assert responses["remind_at"] == "2026-03-08T02:30-07:00"
+    end
+
+    # Mutation: read a wall time the clocks pass twice with the second offset - goes red.
+    test "reads a wall time the clocks pass twice as the earlier instant" do
+      {_socket, responses} =
+        mount_booking("America/Denver")
+        |> book(%{"pickup_at" => "2026-11-27T10:00", "remind_at" => "2026-11-01T01:30"})
+
+      assert responses["remind_at"] == "2026-11-01T01:30-06:00"
+    end
+
+    # Mutation: add an offset to every value under a datetime question's key - goes red.
+    test "hands on unchanged what is not a wall time, and everything with no zone" do
+      for {zone, value} <- [
+            {"America/Denver", ""},
+            {"America/Denver", "2026-11-27T10:00-07:00"},
+            {"America/Denver", "2026-11-27T10:00:00.500"},
+            {"America/Denver", "2026-02-30T10:00"},
+            {"America/Denver", "next Friday"},
+            {nil, "2026-11-27T10:00"},
+            {"Mars/Olympus_Mons", "2026-11-27T10:00"}
+          ] do
+        {_socket, responses} =
+          mount_booking(zone) |> book(%{"pickup_at" => "2026-11-27T17:00Z", "remind_at" => value})
+
+        assert responses["remind_at"] == value
+      end
+    end
+
+    # Mutation: add the offset to every response on a screen with a datetime question - goes red.
+    test "adds no offset to a response of any question but a datetime one" do
+      {_socket, responses} =
+        mount_booking("America/Denver")
+        |> book(%{
+          "pickup_at" => "2026-11-27T10:00",
+          "pickup_note" => "2026-11-27T10:00",
+          "pickup_branch" => "2026-11-27T10:00"
+        })
+
+      assert responses["pickup_at"] == "2026-11-27T10:00-07:00"
+      assert responses["pickup_note"] == "2026-11-27T10:00"
+      assert responses["pickup_branch"] == "2026-11-27T10:00"
+    end
+
+    # Mutation: leave time_zone out of the assigns passed to the components - goes red.
+    test "draws the datetime question as a datetime-local input in the visitor's zone" do
+      html = mount_booking("America/Denver") |> html()
+
+      assert html =~
+               ~r/<input type="datetime-local" id="registration-element-pickup_at"[^>]* min="2026-11-27T09:00" max="2026-11-27T18:00"/
+
+      refute mount_booking(nil) |> html() =~ "datetime-local"
+    end
+  end
 end
