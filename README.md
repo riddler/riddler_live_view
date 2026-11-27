@@ -55,6 +55,9 @@ the host's modules implementing `Riddler.Journey.Host` and
 
 The component asks the host where the Journey is, draws the screen, and hands
 the host each submit and back request; the host's engine steps the Journey.
+A host that passes the optional `re_present` function has the screen drawn
+again as the visitor types, so a button a same-screen condition reveals can
+be pressed.
 
 The markup is plain semantic HTML with a `class` and stable `data-riddler-*`
 attributes on every component; the package ships no stylesheet.
