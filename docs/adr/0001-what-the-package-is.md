@@ -558,8 +558,11 @@ whose answer is a screen with the key of the screen drawn, and which passes
 the shape check and the render probe a `present/1` answer passes, is drawn
 in place of the screen drawn. The draft's values are drawn in its questions,
 a question's `"value"` set to the draft's response for it, so that drawing
-the form again resets no input the visitor has typed in: LiveView keeps the
-value of the focused input only. The findings of an earlier refusal are not
+the form again resets no input of a question that carries a value, which
+LiveView would otherwise do, since it keeps the value of the focused input
+only. A secret question's input carries no value, so a PIN the visitor has
+typed may be cleared when a re-present changes what is drawn before the
+secret question, as when it reveals or hides an element above it. The findings of an earlier refusal are not
 drawn again, since a draft is not validated, and the count of refusals is
 unchanged. An answer `{:error, :no_such_journey}` draws the one refusal.
 Any other answer, a screen of another key, a waiting or a done answer, a
@@ -586,9 +589,22 @@ table gains a row:
 the answer a submit is checked against, so a button the re-presented screen
 shows and whose outcome its moves list is pressed and handed to the host's
 `submit/2` as any other, and an outcome it does not list is still refused
-with no host callback called. The host validates the submit as before, so a
+with no host callback called. The component accepts any outcome the host's
+answer for a draft listed, and the draft is the client's, so a forged change
+event can put a button on the screen that the responses submitted later do
+not reveal: the host's own outcome check on the submit is what bounds it. A
+host that supplies `re_present` therefore resolves the moves for that check
+with the submitted responses in the root, `%{"context" => context,
+"responses" => submit["responses"]}`, rather than with `%{"context" =>
+context}` alone, as riddler's guide "Post a submit" (at `v0.9.0`, "Put the
+steps together") presents the screen for a host without one: resolved
+without the responses, a button whose condition reads a response is hidden
+and its outcome refused as unknown. With the responses in the root, a
 button revealed by the draft is accepted only where the submitted responses
-reveal it too.
+reveal it too. A host kind's component is handed, as the element's
+`"value"`, the raw value the form carried under its key; a component that
+cannot draw that value makes the render probe refuse the answer, and the
+re-present keeps what is drawn, with one log line per change event.
 
 **The rate.** One re-present per change event the browser sends. No
 `phx-debounce` is drawn and there is no attribute for one: debounce is set
