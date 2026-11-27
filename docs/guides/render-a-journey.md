@@ -255,11 +255,36 @@ def re_present(journey, %{"responses" => draft}) do
 end
 ```
 
-The component asks the access check with `:present` before each call, draws
-your screen in place of the one drawn with what the visitor typed kept in its
-inputs, and from then on accepts a press of any button your screen shows. A
-re-present steps nothing: your `submit/2` is called only when a button is
-pressed. An answer for another screen, a waiting or a done answer, or anything
+The component asks the access check with `:present` before each call, and
+draws your screen in place of the one drawn with what the visitor typed kept
+in the inputs that carry a value. A secret question's input carries none, so
+a PIN the visitor typed may be cleared when a re-present reveals or hides an
+element above it. A re-present steps nothing: your `submit/2` is called only
+when a button is pressed.
+
+The component then lets the visitor press any button your answer for the
+draft showed, and the draft is the browser's, so your `submit/2` must check
+the outcome itself, with the submitted responses in the root:
+
+```elixir
+root = %{"context" => context, "responses" => submit["responses"]}
+
+with {:ok, %{"moves" => %{"outcomes" => outcomes}}} <-
+       Journey.present(execution.document, execution.status, root),
+     true <- submit["outcome"] in outcomes do
+  # validate and advance as before
+end
+```
+
+A check that presents with the context alone hides a button whose condition
+reads a response, and refuses its outcome; with the submitted responses, a
+button revealed by the draft is accepted only where the responses it is
+submitted with reveal it too.
+
+If the screen carries an element of your own kind, its component is handed
+the raw value the form carried under its key as the element's `"value"` on a
+re-present. A component that cannot draw that value makes the re-present keep
+what is drawn, with one log line per change. An answer for another screen, a waiting or a done answer, or anything
 else outside the contract keeps what is drawn. Without `re_present` the form
 sends no change event at all, as before.
 

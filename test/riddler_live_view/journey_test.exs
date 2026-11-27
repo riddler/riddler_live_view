@@ -228,10 +228,35 @@ defmodule RiddlerLiveView.JourneyTest do
       held = Map.get(engine.root, "responses", %{})
       root = Map.put(engine.root, "responses", Map.merge(held, responses))
 
-      with :ok <- Screens.validate_screen(document, screen, root, button_key(document, outcome)),
+      with :ok <- presented_outcome(engine, root, outcome),
+           :ok <- Screens.validate_screen(document, screen, root, button_key(document, outcome)),
            {:ok, sealed} <- Screens.seal_secrets(document, screen, root["responses"], &seal/1) do
         {:ok, Map.put(root, "responses", sealed)}
       end
+    end
+
+    # The host's own outcome check: the moves resolved with the submitted
+    # responses in the root, so a button the draft revealed is accepted only
+    # where the submitted responses reveal it too.
+    defp presented_outcome(engine, root, outcome) do
+      case Journey.present(engine.document, engine.status, root) do
+        {:ok, %{"moves" => %{"outcomes" => outcomes}}} ->
+          if outcome in outcomes, do: :ok, else: unknown_outcome()
+
+        _not_a_screen ->
+          unknown_outcome()
+      end
+    end
+
+    defp unknown_outcome do
+      {:error,
+       [
+         %Riddler.Finding{
+           code: "submit.invalid_field",
+           field: "outcome",
+           message: "not presented"
+         }
+       ]}
     end
 
     # The host finds the pressed button by the outcome in its own document.
@@ -1439,7 +1464,8 @@ defmodule RiddlerLiveView.JourneyTest do
       assert mount_choice() |> html() =~ ~s(phx-change="change")
     end
 
-    # Mutation: handle the change event as a no-op - goes red.
+    # Mutation: handle the change event as a no-op, or drop the submitted responses
+    # from the host's outcome check - goes red.
     test "draws the button a same-screen condition reveals, and its submit reaches the host" do
       socket = mount_choice()
       assert_received {:host, :present, "J-8"}
@@ -1458,10 +1484,27 @@ defmodule RiddlerLiveView.JourneyTest do
       refute_received {:host, :submit, _journey, _submit}
       refute_received {:host, :present, _journey}
 
-      press(socket, "card_linked", %{"holds_card" => "true"})
+      pressed = press(socket, "card_linked", %{"holds_card" => "true"})
 
       assert_received {:host, :submit, "J-8",
                        %{"outcome" => "card_linked", "responses" => %{"holds_card" => true}}}
+
+      assert pressed.assigns.findings == []
+      assert get_in(engine("J-8"), [:root, "responses", "holds_card"]) == true
+    end
+
+    # Mutation: drop the host's outcome check - goes red.
+    test "the host refuses a revealed outcome whose submitted responses do not reveal it" do
+      socket = mount_choice() |> event("change", @linking)
+      assert html(socket) =~ ~s(data-riddler-outcome="card_linked")
+
+      refused = press(socket, "card_linked")
+
+      assert_received {:host, :submit, "J-8",
+                       %{"outcome" => "card_linked", "responses" => %{"holds_card" => false}}}
+
+      assert [%{field: "outcome"}] = refused.assigns.findings
+      assert engine("J-8").root == %{}
     end
 
     # Mutation: keep the revealed moves after a re-present that hides them - goes red.

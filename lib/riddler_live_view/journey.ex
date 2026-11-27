@@ -232,9 +232,12 @@ defmodule RiddlerLiveView.Journey do
       added to a datetime included, with every secret question left out;
     * an answer `{:ok, answer}` whose answer is a screen of the shape
       `present/1`'s is, with the key of the screen drawn, is drawn in place
-      of it, with the draft's values drawn in its questions so that no value
-      the visitor typed is lost; the findings of an earlier refusal are not
-      drawn again, since a draft is not validated;
+      of it, with the draft's values drawn in its questions so that no input
+      that carries a value loses what the visitor typed; a secret question's
+      input carries none, so a typed PIN may be cleared when a re-present
+      changes what is drawn before it; a host kind's element is handed the
+      raw form value under its key as its `"value"`; the findings of an
+      earlier refusal are not drawn again, since a draft is not validated;
     * an answer `{:error, :no_such_journey}` draws the refusal; any other
       answer, a screen of another key, a waiting or a done answer included,
       keeps what is drawn and logs one line, as an answer of `submit/2`
@@ -243,7 +246,13 @@ defmodule RiddlerLiveView.Journey do
   A re-present steps nothing: the host's `submit/2` and `back/2` are not
   called, and the Journey is where it was. A button the re-presented screen
   shows, and whose outcome its moves list, is then pressed and submitted as
-  any other. No `phx-debounce` is drawn: each change event the browser sends
+  any other. The draft is the browser's, so the host's `submit/2` is what
+  bounds that outcome: a host with a `re_present` checks the outcome
+  against the moves resolved with the submitted responses in the root,
+  `%{"context" => context, "responses" => submit["responses"]}`, so that a
+  button the draft revealed is accepted only where the submitted responses
+  reveal it too; resolved with the context alone, a button whose condition
+  reads a response is hidden and its outcome refused. No `phx-debounce` is drawn: each change event the browser sends
   asks the host once. A `re_present` that is not a function of two
   arguments raises `ArgumentError` when the component mounts, as the host's
   wiring.
