@@ -217,7 +217,14 @@ defmodule RiddlerLiveView.AccessibilityTest do
        &aria_label_on_named_node/1},
       {"an accessible description is hidden text named last by its element",
        &accessible_description_named/1},
-      {"a control named by aria-label is not also aria-labelledby", &label_not_overridden/1}
+      {"a control named by aria-label is not also aria-labelledby", &label_not_overridden/1},
+      {"radios and checkboxes sharing a name sit in a fieldset with a legend", &choice_grouped/1},
+      {"a finding drawn for a question marks its controls invalid and names it",
+       &finding_marks_controls/1},
+      {"no positive tabindex", &no_positive_tabindex/1},
+      {"nothing focusable is hidden", &nothing_focusable_hidden/1},
+      {"the controls of one element are next to each other in focus order",
+       &focus_keeps_element_together/1}
     ]
   end
 
@@ -246,7 +253,12 @@ defmodule RiddlerLiveView.AccessibilityTest do
     "a slider carries a min and a max",
     "an aria-label is not blank and sits on a node that takes a name",
     "an accessible description is hidden text named last by its element",
-    "a control named by aria-label is not also aria-labelledby"
+    "a control named by aria-label is not also aria-labelledby",
+    "radios and checkboxes sharing a name sit in a fieldset with a legend",
+    "a finding drawn for a question marks its controls invalid and names it",
+    "no positive tabindex",
+    "nothing focusable is hidden",
+    "the controls of one element are next to each other in focus order"
   ]
 
   for name <- @rule_names do
@@ -262,6 +274,63 @@ defmodule RiddlerLiveView.AccessibilityTest do
 
   test "every rule runs as a test of its own" do
     assert Enum.map(rules(), &elem(&1, 0)) == @rule_names
+  end
+
+  # Focus order, deterministically: no positive tabindex (a rule above), so a
+  # Tab press follows the document; the document draws each element's
+  # controls together; and the elements come in the screen's order. A
+  # control outside every element, the Back control, comes last.
+  # Mutation: draw the screen's elements in reverse in elements/1.
+  test "a Tab press reaches the elements' controls in the screen's order" do
+    assert collapsed_focus_order(drawn_elements([])) ==
+             ~w(reminder_email card_pin card_type agrees_to_rules details_continue)
+
+    assert collapsed_focus_order(accessible_elements()) ==
+             ~w(lending_rules reminder_email card_pin card_type agrees_to_rules details_continue) ++
+               [nil]
+
+    assert collapsed_focus_order(displayed()) == ["lending_rules", "details_continue", nil]
+    assert collapsed_focus_order(hosted_elements()) == ["details_continue"]
+
+    # A blocked button is disabled, so a Tab press skips it.
+    assert collapsed_focus_order(drawn_elements([%{"type" => "rating_question"}])) ==
+             ~w(reminder_email card_pin card_type agrees_to_rules)
+
+    assert collapsed_focus_order(journey(:screen)) ==
+             ~w(reminder_email card_pin details_continue) ++ [nil]
+  end
+
+  # The rules over findings and focus read the markup through tags/1; this
+  # proves they find what they look for in the cases, so a pass is not an
+  # empty scan.
+  test "the finding and focus rules reach the markup they check" do
+    owned_findings =
+      for {_label, html} <- cases(),
+          {"p", attrs, ancestors} <- tags(html),
+          attrs =~ ~r/\sdata-riddler-finding="/,
+          owner_key([attrs | Enum.map(ancestors, &elem(&1, 1))]) != nil,
+          do: attrs
+
+    assert length(owned_findings) >= 10
+
+    owned_controls =
+      for {_label, html} <- cases(),
+          {tag, attrs, ancestors} <- tags(html),
+          control?(tag, attrs),
+          do: {owner_key([attrs | Enum.map(ancestors, &elem(&1, 1))]), tag}
+
+    assert {"card_type", "input"} in owned_controls
+    assert {"card_type", "select"} in owned_controls
+    assert {"reminder_email", "input"} in owned_controls
+
+    shared_names =
+      for {_label, html} <- cases(),
+          {name, count} <- html |> choice_names() |> Enum.frequencies(),
+          count > 1,
+          do: name
+
+    assert "card_type" in shared_names
+    assert "card_type[]" in shared_names
   end
 
   # The rules themselves are tested: each one reports the defect it names.
@@ -400,6 +469,37 @@ defmodule RiddlerLiveView.AccessibilityTest do
       "a control named by aria-label is not also aria-labelledby" => [
         ~s(<legend id="l">Card</legend><select class="a" aria-label="Card type" aria-labelledby="l"></select>),
         ~s(<legend id="l">Card</legend><input class="a" aria-labelledby="l" aria-label="Card type"/>)
+      ],
+      "radios and checkboxes sharing a name sit in a fieldset with a legend" => [
+        ~s(<div class="a"><input class="b" type="radio" name="card" id="x"/><input class="b" type="radio" name="card" id="y"/></div>),
+        ~s(<fieldset class="a"><input class="b" type="checkbox" name="b[]"/><input class="b" type="checkbox" name="b[]"/></fieldset>),
+        ~s(<fieldset class="a"><legend class="l">Card</legend><input class="b" type="radio" name="card"/></fieldset><input class="b" type="radio" name="card"/>),
+        ~s(<div class="a" data-riddler-element="choice_question"><p>Card</p></div>)
+      ],
+      "a finding drawn for a question marks its controls invalid and names it" => [
+        ~s(<div class="a" data-riddler-key="e"><input class="b" id="i"/><p id="f" class="f" tabindex="-1" data-riddler-finding="x">F</p></div>),
+        ~s(<div class="a" data-riddler-key="e"><input class="b" aria-invalid="true"/><p id="f" class="f" tabindex="-1" data-riddler-finding="x">F</p></div>),
+        ~s(<fieldset class="a" data-riddler-key="e"><input class="b" type="radio" aria-invalid="true" aria-describedby="f"/><input class="b" type="radio" aria-describedby="f"/><p id="f" class="f" data-riddler-finding="x">F</p></fieldset>),
+        ~s(<div class="a" data-riddler-key="e"><select class="b" aria-invalid="true" aria-describedby="h"></select><p id="f" class="f" data-riddler-finding="x">F</p></div>),
+        ~s(<div class="a" data-riddler-key="e"><input class="b" aria-describedby="f"/><p id="f" class="f" data-riddler-finding="x">F</p></div>)
+      ],
+      "no positive tabindex" => [
+        ~s(<input class="a" tabindex="1"/>),
+        ~s(<p class="a" tabindex="2">x</p>),
+        ~s(<p class="a" tabindex="soon">x</p>),
+        ~s(<p class="a" tabindex="">x</p>)
+      ],
+      "nothing focusable is hidden" => [
+        ~s(<div hidden><input class="a"/></div>),
+        ~s(<button class="a" type="button" hidden>Go</button>),
+        ~s(<div aria-hidden="true"><a class="a" href="/r">Rules</a></div>),
+        ~s(<p class="a" hidden tabindex="-1">F</p>),
+        ~s(<a class="a" href="/r" aria-hidden="true">Rules</a>),
+        ~s(<button class="a" type="button" hidden="">Go</button>)
+      ],
+      "the controls of one element are next to each other in focus order" => [
+        ~s(<div data-riddler-key="a"><input class="a"/></div><div data-riddler-key="b"><input class="b"/></div><div data-riddler-key="a"><input class="c"/></div>),
+        ~s(<div data-riddler-key="a"><input class="a"/></div><button class="b" type="button">Back</button><div data-riddler-key="a"><input class="c"/></div>)
       ]
     }
 
@@ -789,6 +889,169 @@ defmodule RiddlerLiveView.AccessibilityTest do
       |> List.flatten()
 
     hrs ++ not_hr
+  end
+
+  # Sabotage: draw the choice question as a <div> in place of its <fieldset>.
+  defp choice_grouped(html) do
+    in_fieldsets =
+      ~r{<fieldset\b[^>]*>\s*(.*?)</fieldset>}s
+      |> Regex.scan(html, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.filter(fn inner ->
+        case Regex.run(~r{\A<legend\b[^>]*>(.*?)</legend>}s, inner) do
+          [_, text] -> String.trim(text) != ""
+          nil -> false
+        end
+      end)
+      |> Enum.flat_map(&choice_names/1)
+      |> Enum.frequencies()
+
+    shared =
+      html
+      |> choice_names()
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_name, count} -> count > 1 end)
+      |> Enum.reject(fn {name, count} -> Map.get(in_fieldsets, name) == count end)
+      |> Enum.map(&elem(&1, 0))
+
+    not_fieldset =
+      ~r/<(?!fieldset\b)([a-z0-9]+)\b[^>]*\sdata-riddler-element="choice_question"/
+      |> Regex.scan(html)
+      |> List.flatten()
+
+    shared ++ not_fieldset
+  end
+
+  defp choice_names(html) do
+    ~r/<input\b([^>]*\stype="(?:radio|checkbox)"[^>]*)>/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.map(&(Regex.run(~r/\sname="([^"]*)"/, &1, capture: :all_but_first) || [nil]))
+    |> List.flatten()
+  end
+
+  # Sabotage: drop aria-invalid from the choice question's option inputs.
+  defp finding_marks_controls(html) do
+    tags = tags(html)
+
+    for {"p", attrs, ancestors} <- tags,
+        attrs =~ ~r/\sdata-riddler-finding="/,
+        key <- [owner_key([attrs | Enum.map(ancestors, &elem(&1, 1))])],
+        key != nil,
+        id <- [attr_id(attrs)],
+        {tag, control, control_ancestors} <- tags,
+        control?(tag, control),
+        owner_key([control | Enum.map(control_ancestors, &elem(&1, 1))]) == key,
+        not (control =~ ~s( aria-invalid="true") and id in described_ids(control)) do
+      {key, id, tag}
+    end
+  end
+
+  # Sabotage: draw tabindex="1" on the finding paragraph.
+  defp no_positive_tabindex(html) do
+    ~r/\stabindex="([^"]*)"/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.reject(&(&1 =~ ~r/\A(?:-\d+|0)\z/))
+  end
+
+  # Sabotage: give the frame's hidden focus trigger tabindex="-1".
+  defp nothing_focusable_hidden(html) do
+    for {tag, attrs, ancestors} <- tags(html),
+        focusable?(tag, attrs) or attrs =~ ~r/\stabindex="/,
+        Enum.any?([attrs | Enum.map(ancestors, &elem(&1, 1))], &hidden?/1) do
+      {tag, attrs}
+    end
+  end
+
+  # Sabotage: draw the screen's elements twice in elements/1.
+  defp focus_keeps_element_together(html) do
+    keys =
+      html
+      |> focus_order()
+      |> Enum.map(&(&1 || :outside))
+      |> Enum.chunk_by(& &1)
+      |> Enum.map(&hd/1)
+
+    Enum.reject(keys -- Enum.uniq(keys), &(&1 == :outside))
+  end
+
+  # The element key that owns each control a Tab press reaches, in the
+  # order the document puts them: with no positive tabindex, that is the
+  # order a visitor moves through.
+  defp focus_order(html) do
+    for {tag, attrs, ancestors} <- tags(html), focusable?(tag, attrs) do
+      owner_key([attrs | Enum.map(ancestors, &elem(&1, 1))])
+    end
+  end
+
+  defp collapsed_focus_order(html) do
+    html |> focus_order() |> Enum.chunk_by(& &1) |> Enum.map(&hd/1)
+  end
+
+  @void_tags ~w(area base br col embed hr img input link meta source track wbr)
+
+  # Every opening tag in document order, with the open tags around it,
+  # innermost first.
+  defp tags(html) do
+    ~r{<(/?)([a-z][a-z0-9]*)\b([^>]*?)(/?)>}
+    |> Regex.scan(html, capture: :all_but_first)
+    |> Enum.reduce({[], []}, fn
+      ["/", tag, _attrs, _self], {stack, acc} ->
+        {close_tag(stack, tag), acc}
+
+      ["", tag, attrs, self_closing], {stack, acc} ->
+        acc = [{tag, attrs, stack} | acc]
+
+        if tag in @void_tags or self_closing == "/",
+          do: {stack, acc},
+          else: {[{tag, attrs} | stack], acc}
+    end)
+    |> elem(1)
+    |> Enum.reverse()
+  end
+
+  defp close_tag(stack, tag) do
+    case Enum.split_while(stack, fn {open, _attrs} -> open != tag end) do
+      {_inner, [_open | rest]} -> rest
+      {_inner, []} -> stack
+    end
+  end
+
+  defp owner_key(attrs_list) do
+    Enum.find_value(attrs_list, fn attrs ->
+      case Regex.run(~r/\sdata-riddler-key="([^"]*)"/, attrs) do
+        [_, key] -> key
+        nil -> nil
+      end
+    end)
+  end
+
+  defp control?(tag, attrs) when tag in ~w(input select textarea),
+    do: not (attrs =~ ~s( type="hidden"))
+
+  defp control?(_tag, _attrs), do: false
+
+  defp focusable?(tag, attrs) do
+    cond do
+      Regex.run(~r/\stabindex="(-\d+)"/, attrs) -> false
+      attrs =~ ~r/\sdisabled(?:[\s=]|\z)/ -> false
+      attrs =~ ~r/\stabindex="/ -> true
+      tag == "a" -> attrs =~ ~r/\shref="/
+      tag in ~w(button select textarea) -> true
+      tag == "input" -> not (attrs =~ ~s( type="hidden"))
+      true -> false
+    end
+  end
+
+  defp hidden?(attrs),
+    do: attrs =~ ~r/\shidden(?:[\s=]|\z)/ or attrs =~ ~s( aria-hidden="true")
+
+  defp described_ids(attrs) do
+    case Regex.run(~r/\saria-describedby="([^"]*)"/, attrs) do
+      [_, ids] -> String.split(ids)
+      nil -> []
+    end
   end
 
   defp finding(code, element_key, author_message \\ nil) do
