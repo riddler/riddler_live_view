@@ -52,6 +52,17 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"text question, time format with seconds",
        text_question(%{"format" => "time", "value" => "10:15:30"})},
       {"text question, datetime format", text_question(%{"format" => "datetime"})},
+      {"text question, datetime format in the visitor's zone, required, with bounds and a finding",
+       datetime_question(
+         %{
+           "required" => true,
+           "help" => "Any time the branch is open.",
+           "min" => "2026-11-27T16:00Z",
+           "max" => "2026-11-28T01:00Z",
+           "value" => "2026-11-27T18:30:00Z"
+         },
+         [finding("response.out_of_range", "pickup_at")]
+       )},
       {"text question, multiline, required, with help",
        text_question(%{
          "format" => nil,
@@ -1102,6 +1113,25 @@ defmodule RiddlerLiveView.AccessibilityTest do
     """)
   end
 
+  defp datetime_question(fields, findings) do
+    element =
+      Map.merge(
+        %{
+          "type" => "text_question",
+          "key" => "pickup_at",
+          "label" => "Preferred pickup appointment",
+          "format" => "datetime"
+        },
+        fields
+      )
+
+    assigns = %{element: element, findings: findings}
+
+    rendered_to_string(
+      ~H|<Components.text_question element={@element} findings={@findings} time_zone="America/Denver" />|
+    )
+  end
+
   defp text_question(fields, findings \\ []) do
     element =
       Map.merge(
@@ -1312,6 +1342,7 @@ defmodule RiddlerLiveView.AccessibilityTest do
       id_prefix: nil,
       components: %{},
       unknown_text: nil,
+      time_zone: nil,
       waiting_text: "One moment.",
       done_text: "All done.",
       refused: state == :refused,

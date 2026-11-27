@@ -220,6 +220,7 @@ defmodule RiddlerLiveView.Components do
   import Phoenix.Component, except: [link: 1]
 
   alias Phoenix.LiveView.JS
+  alias RiddlerLiveView.LocalTime
 
   @question_types ~w(text_question secret_question choice_question boolean_question)
 
@@ -611,8 +612,11 @@ defmodule RiddlerLiveView.Components do
   `value`; a presented value that is not text or a number is not drawn.
 
   The `"format"` picks the input's `type`: `email` for `"email"`, `tel` for
-  `"phone"`, `date` for `"date"`, `time` for `"time"`, and `text` for every
-  other format and for none, `"datetime"` among them. A date or time input
+  `"phone"`, `date` for `"date"`, `time` for `"time"`, `datetime-local` for
+  `"datetime"` where the host passes a `time_zone`, and `text` for every
+  other format and for none, `"datetime"` without a `time_zone` among them.
+  The "A datetime question and the visitor's time zone" section below says
+  how a datetime-local input is drawn. A date or time input
   carries the question's `"min"` and `"max"` as riddler presents them, which
   admission holds to the format's shape, the shape the browser's own bounds
   take. A time input moves by the minute, the browser's default, unless the
@@ -667,11 +671,43 @@ defmodule RiddlerLiveView.Components do
 
   The input's `id` is derived from `id_prefix` and the question's `"key"`,
   and its `name` is the key unless the host passes one.
+
+  ## A datetime question and the visitor's time zone
+
+  riddler's `"datetime"` is an instant: a date and a time joined by `T`,
+  then `Z` or an offset `+HH:MM` or `-HH:MM`. The browser's
+  `<input type="datetime-local">` takes and submits a wall time with no
+  offset. Where the host passes `time_zone`, the visitor's time zone as a
+  name its configured `Calendar.TimeZoneDatabase` resolves, such as
+  `"America/Denver"`, the question is drawn as a datetime-local input, and
+  its presented `"value"`, `"min"` and `"max"` are drawn as the wall times
+  they are in that zone, `YYYY-MM-DDTHH:MM`, or `YYYY-MM-DDTHH:MM:SS` where
+  the presented text carries seconds. The input carries `step="1"` and
+  moves by the second where any of them carries seconds. A presented value
+  or bound not in riddler's datetime shape, or whose wall time in the zone
+  falls outside the four-digit years the input takes, is not drawn.
+
+  What the input submits is a wall time with no offset, which riddler
+  refuses as `response.format`; `RiddlerLiveView.Journey` adds the offset
+  before it hands the submit on, as its moduledoc's "A submit" section says.
+  A host that draws a datetime question itself, with this component, adds
+  the offset itself.
+
+  With no `time_zone`, or one the host's database does not resolve (Elixir's
+  default database knows only `"Etc/UTC"`), a datetime question is drawn as
+  a plain text input, with no bounds, and the visitor types the instant in
+  riddler's shape.
   """
   attr(:element, :map,
     required: true,
     doc:
       "A `text_question` element of the answer: its `\"key\"`, `\"label\"` and, where present, `\"help\"`, `\"placeholder\"`, `\"required\"`, `\"format\"`, `\"min\"`, `\"max\"`, `\"style\"`, `\"step\"` and `\"value\"`."
+  )
+
+  attr(:time_zone, :string,
+    default: nil,
+    doc:
+      "The visitor's time zone, a name the host's `Calendar.TimeZoneDatabase` resolves; a `\"datetime\"` question is drawn as a datetime-local input in it. A plain text input when nil."
   )
 
   attr(:name, :string, default: nil, doc: "The input's `name`; the element's `\"key\"` when nil.")
@@ -704,7 +740,8 @@ defmodule RiddlerLiveView.Components do
     findings = element_findings(assigns, key)
 
     element = assigns.element
-    drawn_as = text_drawn_as(element)
+    zone = LocalTime.zone(assigns.time_zone)
+    drawn_as = text_drawn_as(element, zone)
     accessible = accessible(element, prefix)
 
     assigns =
@@ -713,9 +750,9 @@ defmodule RiddlerLiveView.Components do
         input_name: assigns.name || key,
         drawn_as: drawn_as,
         input_type: input_type(drawn_as, element["format"]),
-        bounds: text_bounds(drawn_as, element),
+        bounds: text_bounds(drawn_as, element, zone),
         style: present_text(element["style"]),
-        value: present_value(element["value"]),
+        value: text_value(drawn_as, element["value"], zone),
         help: help,
         help_id: help_id(prefix, key),
         drawn_findings: findings,
@@ -1476,6 +1513,12 @@ defmodule RiddlerLiveView.Components do
       "The text drawn, by finding code, for a finding whose author wrote no message, passed to every question."
   )
 
+  attr(:time_zone, :string,
+    default: nil,
+    doc:
+      "The visitor's time zone, passed to every text question, as `text_question/1` describes it."
+  )
+
   attr(:id_prefix, :string,
     default: "riddler",
     doc:
@@ -1520,6 +1563,7 @@ defmodule RiddlerLiveView.Components do
       moves={@moves}
       findings={@findings}
       finding_text={@finding_text}
+      time_zone={@time_zone}
       blocked_by={@notice_id}
       id_prefix={@id_prefix}
     />
@@ -1557,6 +1601,7 @@ defmodule RiddlerLiveView.Components do
   attr(:moves, :map, required: true)
   attr(:findings, :list, required: true)
   attr(:finding_text, :map, required: true)
+  attr(:time_zone, :string, required: true)
   attr(:blocked_by, :string, required: true)
   attr(:id_prefix, :string, required: true)
 
@@ -1574,6 +1619,7 @@ defmodule RiddlerLiveView.Components do
       element={@element}
       findings={@findings}
       finding_text={@finding_text}
+      time_zone={@time_zone}
       id_prefix={@id_prefix}
     />
     <.secret_question
@@ -1840,11 +1886,15 @@ defmodule RiddlerLiveView.Components do
   #     the visitor between 0 and 100, and under `"integer"` whole numbers;
   #   * `"stepper"` is a number input under `"integer"` and `"number"`, and
   #     under `"integer"` only where every numeric bound is a whole number;
-  #   * a `"date"` or `"time"` format is the browser's own input for it.
+  #   * a `"date"` or `"time"` format is the browser's own input for it, and
+  #     so is a `"datetime"` format where a time zone is in hand.
   #
   # Every other style, and every style under another format, is drawn as the
   # question with no style: riddler passes a hint it does not offer through,
   # and a renderer that does not draw it loses nothing.
+  defp text_drawn_as(%{"format" => "datetime"}, zone) when is_binary(zone), do: :datetime
+  defp text_drawn_as(element, _zone), do: text_drawn_as(element)
+
   defp text_drawn_as(%{"style" => "multiline"} = element) do
     if element["format"] in [nil, "pattern"],
       do: :multiline,
@@ -1872,9 +1922,22 @@ defmodule RiddlerLiveView.Components do
   defp input_type(:stepper, _format), do: "number"
   defp input_type(:date, _format), do: "date"
   defp input_type(:time, _format), do: "time"
+  defp input_type(:datetime, _format), do: "datetime-local"
   defp input_type(_drawn_as, "email"), do: "email"
   defp input_type(_drawn_as, "phone"), do: "tel"
   defp input_type(_drawn_as, _format), do: "text"
+
+  # A datetime's bounds and value are presented as instants, and drawn as
+  # the wall times they are in the visitor's zone.
+  defp text_bounds(:datetime, element, zone) do
+    value = LocalTime.local(element["value"], zone)
+    min = LocalTime.local(element["min"], zone)
+    max = LocalTime.local(element["max"], zone)
+
+    %{min: min, max: max, step: datetime_step([value, min, max])}
+  end
+
+  defp text_bounds(drawn_as, element, _zone), do: text_bounds(drawn_as, element)
 
   # The bounds and step an input carries: a date's or a time's bounds as
   # riddler presents them, which admission holds to the format's shape, the
@@ -1907,6 +1970,15 @@ defmodule RiddlerLiveView.Components do
   end
 
   defp time_step(:date, _values), do: nil
+
+  # A datetime-local input moves by the minute unless told otherwise; where
+  # a drawn wall time carries seconds it moves by the second.
+  defp datetime_step(values) do
+    if Enum.any?(values, &(is_binary(&1) and String.length(&1) == 19)), do: "1"
+  end
+
+  defp text_value(:datetime, value, zone), do: LocalTime.local(value, zone)
+  defp text_value(_drawn_as, value, _zone), do: present_value(value)
 
   # A step the question carries, above zero; otherwise any number moves a
   # number question's input, and an integer question's moves by one, the
