@@ -14,33 +14,27 @@ patron-registration screen looking the same wherever it is embedded, and keeps
 the host to what is its own: who may see a Journey, where it runs and what
 happens when a visitor submits.
 
-This version is unreleased. It carries the screen's frame, a component for
-each element kind riddler presents - heading, text, text question, secret
+The package carries the screen's frame, a component for each element kind
+riddler presents - heading, text, image, divider, link, text question, secret
 question, choice question, boolean question and button - the Back control,
 findings drawn beside the questions they name, and
-`RiddlerLiveView.Journey`, the LiveComponent that shows a Journey; the package
-stays at 0.0.0 until its first release.
+`RiddlerLiveView.Journey`, the LiveComponent that shows a Journey.
 
 ## Installation
 
-`riddler_live_view` is not on Hex yet. Until its first release, depend on the
-repository in your `mix.exs`:
+Add `riddler_live_view` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:riddler_live_view, github: "riddler/riddler_live_view"}
+    {:riddler_live_view, "~> 0.1.0"}
   ]
 end
 ```
 
-The first release is installed from Hex as `riddler_live_view`, with a
-version requirement this section will then carry.
-
 > **Pre-1.0.** The public API is still moving, and a minor version may break
-> it. Once the package is on Hex, pinning to an exact minor - `~> X.Y.0` - is
-> the recommended way to consume it until 1.0; until then, pin the git
-> dependency with `ref:` or `tag:`.
+> it. Pinning to an exact minor - `~> X.Y.0` - is the recommended way to
+> consume it until 1.0.
 
 ## Basic usage
 

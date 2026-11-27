@@ -1,3 +1,0 @@
-### Added
-
-- The question components and `RiddlerLiveView.Components.frame/1` take a refused submit's `findings`, as `Riddler.Finding` structs or their wire form: a question draws each finding whose `element_key` is its key beside its input, names it in the input's `aria-describedby` ahead of the help and sets `aria-invalid="true"`, the frame draws the findings that name no question of the screen, and focus moves to the first finding when they appear; a finding shows its `author_message` where the author wrote one and otherwise the package's own text for its code, which a host replaces through `finding_text`, and never its `message`.
