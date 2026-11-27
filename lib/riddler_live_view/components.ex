@@ -22,6 +22,11 @@ defmodule RiddlerLiveView.Components do
       "Elements of a kind the package does not draw" section says what then
       happens to the screen's submit.
 
+  `link/1` and `button/1` share their names with components a Phoenix
+  application already has, `Phoenix.Component.link/1` and the `button/1` of
+  a generated `CoreComponents`, so a host aliases this module, or calls its
+  components fully qualified, rather than importing it beside them.
+
   The markup ships no stylesheet and no CSS framework class. Every component
   carries a `class` attribute, and a host may add its own classes through
   the `class` attribute each component takes. Every component also carries
