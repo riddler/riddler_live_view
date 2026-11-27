@@ -27,7 +27,7 @@ Add `riddler_live_view` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:riddler_live_view, "~> 0.1.0"}
+    {:riddler_live_view, "~> 0.2.0"}
   ]
 end
 ```

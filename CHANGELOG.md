@@ -10,6 +10,22 @@ fragment in [`changelog.d/`](https://github.com/riddler/riddler_live_view/blob/m
 into a version section at release. See that README for the format and for when a
 change warrants an entry at all.
 
+## [0.2.0] 2026-11-27
+
+This release adds an optional re-present hook to `RiddlerLiveView.Journey`.
+A host that passes a `re_present` function has the presented screen drawn
+again against what the visitor has typed but not sent, so a button a
+same-screen condition reveals can be pressed. A host that does not pass it
+sees no change from 0.1.0: the form carries no change event. A host that
+passes it must check a submitted outcome against the moves resolved with the
+submitted responses, not with the context alone, so that a button the draft
+revealed is accepted only where the submitted responses reveal it too. It
+still requires riddler `~> 0.9` and phoenix_live_view `~> 1.2`.
+
+### Added
+
+- `RiddlerLiveView.Journey` takes an optional `re_present` function: with it, the form sends a change event and the screen is drawn again from the host's answer for what the visitor has typed, so a button a same-screen condition reveals can be pressed; without it nothing changes.
+
 ## [0.1.0] 2026-11-26
 
 The first release of `riddler_live_view`, the Phoenix LiveView face of
