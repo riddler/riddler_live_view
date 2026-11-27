@@ -280,6 +280,7 @@ defmodule RiddlerLiveView.FindingsTest do
     end
 
     # Mutation: drop aria-invalid={@invalid} from the choice question's select - goes red.
+    # Mutation: name only the findings in the select's aria-describedby - goes red.
     test "a choice question drawn as a select marks the select invalid" do
       html =
         question_html(:choice_question, Map.put(@card_type, "style", "dropdown"), [
@@ -288,7 +289,10 @@ defmodule RiddlerLiveView.FindingsTest do
 
       assert [_, select] = Regex.run(~r{<select([^>]*)>}, html)
       assert select =~ ~s( aria-invalid="true")
-      assert select =~ ~s( aria-describedby="riddler-element-card_type-finding-1")
+
+      assert select =~
+               ~s( aria-describedby="riddler-element-card_type-finding-1 riddler-element-card_type-help")
+
       assert [[_, "Choose from the options given."]] = finding_paragraphs(html)
     end
 

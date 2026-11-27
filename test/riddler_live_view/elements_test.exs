@@ -240,7 +240,9 @@ defmodule RiddlerLiveView.ElementsTest do
       assert html =~ ~r/<input type="date" id="riddler-element-birth_date"/
       assert html =~ ~s(data-riddler-style="multiline")
       refute html =~ "<textarea"
-      refute html =~ "Your date of birth"
+
+      assert html =~
+               ~r/<input type="date" id="riddler-element-birth_date"[^>]* aria-label="Your date of birth"/
     end
   end
 

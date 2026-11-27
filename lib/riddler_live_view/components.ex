@@ -65,6 +65,8 @@ defmodule RiddlerLiveView.Components do
       are its `"size"` and `"fit"` where it carries them, and
       `data-riddler-style` on a link, whose value is its `"style"` where it
       carries one;
+    * `data-riddler-accessible-description` on the hidden text of an
+      element's accessible description;
     * `data-riddler-back` on the Back control;
     * `data-riddler-unknown` on the notice `elements/1` draws for a screen
       with elements it cannot draw, whose value is their kinds that are
@@ -82,6 +84,54 @@ defmodule RiddlerLiveView.Components do
   `riddler-text-caption`, so a host's stylesheet can set a caption apart. An
   image's alt text is always drawn, as `alt=""` for a decorative image. A
   link is a plain `<a href>`: it submits no form and raises no outcome.
+
+  ## Accessible label and description
+
+  riddler presents, on an element of any kind, an `"accessible_label"`, the
+  name an assistive technology gives the element where its visible text is
+  not enough, and an `"accessible_description"`, a longer account it may read
+  after the name, each where the document wrote one and rendered from its
+  template. A component draws them on the node a visitor reaches:
+
+    * the label is that node's `aria-label`: the `<h1>` to `<h6>` of a
+      heading, the `<img>` of an image, the `<hr>` of a divider, the `<a>` of
+      a link, the `<button>` of a button, and the `<input>` or `<textarea>`
+      of a text, secret or boolean question, not the `<div>` around it,
+      which has no role to name;
+    * a choice question's label is its `<fieldset>`'s `aria-label`, the
+      name of the group its options sit in, since each option keeps its own
+      label; where the options are drawn as a `<select>` or a search input,
+      that control carries the label too, in place of the `aria-labelledby`
+      that names it by the legend, since `aria-labelledby` would win over it;
+    * the description is a `<span hidden>` drawn after the element, or after
+      a question's help inside it, whose `id` is derived from `id_prefix` and
+      the element's `"key"`; the node that carries the label names it last in
+      its `aria-describedby`, after the ids already there: a question's
+      findings, what is held and its help, in that order, and the notice that
+      blocks a button. A choice question drawn as a `<select>` or a search
+      input names its findings, its help and its description from that
+      control as well as from its fieldset.
+
+  A text draws no `aria-label`: its node is a paragraph, which ARIA does not
+  let an author name, and an assistive technology reads its text. Its
+  description is drawn and named all the same.
+
+  An image's `"alt"` stays its `alt`. Where the image carries a label too, the
+  label is its `aria-label`, which an assistive technology reads in place of
+  the `alt`; the `alt` is still what a browser shows where the image does not
+  load. An image whose `"alt"` is empty is decorative until it carries a
+  label: a named image is no longer hidden from an assistive technology.
+
+  The label is drawn as riddler presents it, whatever the element's visible
+  text says. A visitor who speaks a control's visible text to operate it is
+  understood only where the label contains that text (WCAG 2.5.3, Label in
+  Name); riddler's records leave the wording to the document's author, and
+  the package neither checks it nor joins the two.
+
+  An element that carries neither, or carries them blank, draws exactly the
+  markup it draws without them: no `aria-label`, no hidden text and no `id`
+  in `aria-describedby`. Each component takes an `id_prefix` for the
+  description's `id`, and `elements/1` passes its own to every element.
 
   ## Findings
 
@@ -334,12 +384,19 @@ defmodule RiddlerLiveView.Components do
 
   attr(:class, :any, default: nil, doc: "Classes added to the heading's own.")
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   @spec heading(map()) :: Phoenix.LiveView.Rendered.t()
   def heading(assigns) do
     assigns =
       assign(assigns,
         tag: heading_tag(assigns.element["level"]),
-        text: present_text(assigns.element["text"])
+        text: present_text(assigns.element["text"]),
+        accessible: accessible(assigns.element, assigns.id_prefix)
       )
 
     ~H"""
@@ -349,9 +406,11 @@ defmodule RiddlerLiveView.Components do
       class={["riddler-heading" | List.wrap(@class)]}
       data-riddler-element="heading"
       data-riddler-key={@element["key"]}
+      aria-label={@accessible.label}
+      aria-describedby={@accessible.description_id}
     >
       {@text}
-    </.dynamic_tag>
+    </.dynamic_tag><.accessible_description :if={@text} accessible={@accessible} />
     """
   end
 
@@ -371,18 +430,29 @@ defmodule RiddlerLiveView.Components do
 
   attr(:class, :any, default: nil, doc: "Classes added to the paragraph's own.")
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   @spec text(map()) :: Phoenix.LiveView.Rendered.t()
   def text(assigns) do
-    assigns = assign(assigns, style_class: text_style_class(assigns.element["style"]))
+    assigns =
+      assign(assigns,
+        style_class: text_style_class(assigns.element["style"]),
+        accessible: accessible(assigns.element, assigns.id_prefix)
+      )
 
     ~H"""
     <p
       class={["riddler-text", @style_class | List.wrap(@class)]}
       data-riddler-element="text"
       data-riddler-key={@element["key"]}
+      aria-describedby={@accessible.description_id}
     >
       {@element["text"]}
-    </p>
+    </p><.accessible_description accessible={@accessible} />
     """
   end
 
@@ -407,6 +477,12 @@ defmodule RiddlerLiveView.Components do
 
   attr(:class, :any, default: nil, doc: "Classes added to the image's own.")
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   @spec image(map()) :: Phoenix.LiveView.Rendered.t()
   def image(assigns) do
     element = assigns.element
@@ -416,7 +492,8 @@ defmodule RiddlerLiveView.Components do
         src: present_text(element["src"]),
         alt: if(is_binary(element["alt"]), do: element["alt"], else: ""),
         size: present_text(element["size"]),
-        fit: present_text(element["fit"])
+        fit: present_text(element["fit"]),
+        accessible: accessible(element, assigns.id_prefix)
       )
 
     ~H"""
@@ -429,7 +506,9 @@ defmodule RiddlerLiveView.Components do
       data-riddler-key={@element["key"]}
       data-riddler-size={@size}
       data-riddler-fit={@fit}
-    />
+      aria-label={@accessible.label}
+      aria-describedby={@accessible.description_id}
+    /><.accessible_description :if={@src} accessible={@accessible} />
     """
   end
 
@@ -444,14 +523,24 @@ defmodule RiddlerLiveView.Components do
 
   attr(:class, :any, default: nil, doc: "Classes added to the rule's own.")
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   @spec divider(map()) :: Phoenix.LiveView.Rendered.t()
   def divider(assigns) do
+    assigns = assign(assigns, accessible: accessible(assigns.element, assigns.id_prefix))
+
     ~H"""
     <hr
       class={["riddler-divider" | List.wrap(@class)]}
       data-riddler-element="divider"
       data-riddler-key={@element["key"]}
-    />
+      aria-label={@accessible.label}
+      aria-describedby={@accessible.description_id}
+    /><.accessible_description accessible={@accessible} />
     """
   end
 
@@ -477,6 +566,12 @@ defmodule RiddlerLiveView.Components do
 
   attr(:class, :any, default: nil, doc: "Classes added to the link's own.")
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   @spec link(map()) :: Phoenix.LiveView.Rendered.t()
   def link(assigns) do
     element = assigns.element
@@ -485,7 +580,8 @@ defmodule RiddlerLiveView.Components do
       assign(assigns,
         href: present_text(element["href"]),
         label: present_text(element["label"]),
-        style: present_text(element["style"])
+        style: present_text(element["style"]),
+        accessible: accessible(element, assigns.id_prefix)
       )
 
     ~H"""
@@ -496,9 +592,11 @@ defmodule RiddlerLiveView.Components do
       data-riddler-element="link"
       data-riddler-key={@element["key"]}
       data-riddler-style={@style}
+      aria-label={@accessible.label}
+      aria-describedby={@accessible.description_id}
     >
       {@label}
-    </a>
+    </a><.accessible_description :if={@href && @label} accessible={@accessible} />
     """
   end
 
@@ -607,6 +705,7 @@ defmodule RiddlerLiveView.Components do
 
     element = assigns.element
     drawn_as = text_drawn_as(element)
+    accessible = accessible(element, prefix)
 
     assigns =
       assign(assigns,
@@ -621,7 +720,9 @@ defmodule RiddlerLiveView.Components do
         help_id: help_id(prefix, key),
         drawn_findings: findings,
         invalid: invalid(findings),
-        described_by: described_by(findings, [help && help_id(prefix, key)])
+        accessible: accessible,
+        described_by:
+          described_by(findings, [help && help_id(prefix, key), accessible.description_id])
       )
 
     ~H"""
@@ -638,6 +739,7 @@ defmodule RiddlerLiveView.Components do
         name={@input_name}
         placeholder={@element["placeholder"]}
         required={@element["required"] == true}
+        aria-label={@accessible.label}
         aria-invalid={@invalid}
         aria-describedby={@described_by}
         class="riddler-input riddler-textarea"
@@ -654,13 +756,16 @@ defmodule RiddlerLiveView.Components do
         step={@bounds.step}
         placeholder={@element["placeholder"]}
         required={@element["required"] == true}
+        aria-label={@accessible.label}
         aria-invalid={@invalid}
         aria-describedby={@described_by}
         class="riddler-input"
         data-riddler-input
       />
       <.finding_list findings={@drawn_findings} />
-      <p :if={@help} id={@help_id} class="riddler-help" data-riddler-help>{@help}</p>
+      <p :if={@help} id={@help_id} class="riddler-help" data-riddler-help>{@help}</p><.accessible_description accessible={
+        @accessible
+      } />
     </div>
     """
   end
@@ -738,6 +843,7 @@ defmodule RiddlerLiveView.Components do
     held = assigns.element["held"] == true
     help = present_text(assigns.element["help"])
     findings = element_findings(assigns, key)
+    accessible = accessible(assigns.element, prefix)
 
     assigns =
       assign(assigns,
@@ -750,8 +856,13 @@ defmodule RiddlerLiveView.Components do
         required: assigns.element["required"] == true and not held,
         drawn_findings: findings,
         invalid: invalid(findings),
+        accessible: accessible,
         described_by:
-          described_by(findings, [held && held_id(prefix, key), help && help_id(prefix, key)])
+          described_by(findings, [
+            held && held_id(prefix, key),
+            help && help_id(prefix, key),
+            accessible.description_id
+          ])
       )
 
     ~H"""
@@ -767,6 +878,7 @@ defmodule RiddlerLiveView.Components do
         name={@input_name}
         autocomplete="off"
         required={@required}
+        aria-label={@accessible.label}
         aria-invalid={@invalid}
         aria-describedby={@described_by}
         class="riddler-input"
@@ -774,7 +886,9 @@ defmodule RiddlerLiveView.Components do
       />
       <.finding_list findings={@drawn_findings} />
       <p :if={@held} id={@held_id} class="riddler-held" data-riddler-held>{@held_text}</p>
-      <p :if={@help} id={@help_id} class="riddler-help" data-riddler-help>{@help}</p>
+      <p :if={@help} id={@help_id} class="riddler-help" data-riddler-help>{@help}</p><.accessible_description accessible={
+        @accessible
+      } />
     </div>
     """
   end
@@ -896,6 +1010,10 @@ defmodule RiddlerLiveView.Components do
     options = choice_options(element["answer_options"], {prefix, key}, chosen, finding_ids)
     searchable = element["searchable"] == true
     drawn_as = choice_drawn_as(element["style"], many, searchable)
+    accessible = accessible(element, prefix)
+
+    described_by =
+      described_by(findings, [help && help_id(prefix, key), accessible.description_id])
 
     assigns =
       assign(assigns,
@@ -918,8 +1036,9 @@ defmodule RiddlerLiveView.Components do
         help_id: help_id(prefix, key),
         drawn_findings: findings,
         invalid: invalid(findings),
-        finding_ids: finding_ids,
-        described_by: described_by(findings, [help && help_id(prefix, key)])
+        accessible: accessible,
+        control_labelled_by: if(accessible.label, do: nil, else: legend_id(prefix, key)),
+        described_by: described_by
       )
 
     ~H"""
@@ -932,6 +1051,7 @@ defmodule RiddlerLiveView.Components do
       data-riddler-max-selections={@max_selections}
       data-riddler-style={@style}
       data-riddler-searchable={@searchable}
+      aria-label={@accessible.label}
       aria-describedby={@described_by}
     >
       <legend id={@legend_id} class="riddler-legend" data-riddler-legend>{@element["label"]}</legend>
@@ -972,9 +1092,10 @@ defmodule RiddlerLiveView.Components do
         list={@datalist_id}
         autocomplete="off"
         required={@required}
+        aria-label={@accessible.label}
         aria-invalid={@invalid}
-        aria-describedby={@finding_ids}
-        aria-labelledby={@legend_id}
+        aria-describedby={@described_by}
+        aria-labelledby={@control_labelled_by}
         class="riddler-input riddler-search"
         data-riddler-input
       />
@@ -995,9 +1116,10 @@ defmodule RiddlerLiveView.Components do
         name={@input_name}
         multiple={@many}
         required={@required}
+        aria-label={@accessible.label}
         aria-invalid={@invalid}
-        aria-describedby={@finding_ids}
-        aria-labelledby={@legend_id}
+        aria-describedby={@described_by}
+        aria-labelledby={@control_labelled_by}
         class="riddler-select"
         data-riddler-input
       >
@@ -1030,7 +1152,9 @@ defmodule RiddlerLiveView.Components do
         <% end %>
       </dl>
       <.finding_list findings={@drawn_findings} />
-      <p :if={@help} id={@help_id} class="riddler-help" data-riddler-help>{@help}</p>
+      <p :if={@help} id={@help_id} class="riddler-help" data-riddler-help>{@help}</p><.accessible_description accessible={
+        @accessible
+      } />
     </fieldset>
     """
   end
@@ -1095,6 +1219,7 @@ defmodule RiddlerLiveView.Components do
     prefix = assigns.id_prefix
     help = present_text(assigns.element["help"])
     findings = element_findings(assigns, key)
+    accessible = accessible(assigns.element, prefix)
 
     assigns =
       assign(assigns,
@@ -1106,7 +1231,9 @@ defmodule RiddlerLiveView.Components do
         help_id: help_id(prefix, key),
         drawn_findings: findings,
         invalid: invalid(findings),
-        described_by: described_by(findings, [help && help_id(prefix, key)])
+        accessible: accessible,
+        described_by:
+          described_by(findings, [help && help_id(prefix, key), accessible.description_id])
       )
 
     ~H"""
@@ -1122,6 +1249,7 @@ defmodule RiddlerLiveView.Components do
         value="true"
         checked={@checked}
         required={@required}
+        aria-label={@accessible.label}
         aria-invalid={@invalid}
         aria-describedby={@described_by}
         class="riddler-input"
@@ -1129,7 +1257,9 @@ defmodule RiddlerLiveView.Components do
       />
       <label for={@input_id} class="riddler-label" data-riddler-label>{@element["label"]}</label>
       <.finding_list findings={@drawn_findings} />
-      <p :if={@help} id={@help_id} class="riddler-help" data-riddler-help>{@help}</p>
+      <p :if={@help} id={@help_id} class="riddler-help" data-riddler-help>{@help}</p><.accessible_description accessible={
+        @accessible
+      } />
     </div>
     """
   end
@@ -1185,16 +1315,25 @@ defmodule RiddlerLiveView.Components do
 
   attr(:class, :any, default: nil, doc: "Classes added to the button's own.")
 
+  attr(:id_prefix, :string,
+    default: "riddler",
+    doc:
+      "The prefix of every `id` the component derives, `\"riddler\"` unless the host passes one; two Journeys on one page each pass their own."
+  )
+
   @spec button(map()) :: Phoenix.LiveView.Rendered.t()
   def button(assigns) do
     outcome = assigns.element["outcome"]
     style = assigns.element["style"]
+    accessible = accessible(assigns.element, assigns.id_prefix)
 
     assigns =
       assign(assigns,
         shown: is_binary(outcome) and outcome in List.wrap(assigns.moves["outcomes"]),
         validates: assigns.element["validates"] != false,
-        style: if(is_binary(style), do: style)
+        style: if(is_binary(style), do: style),
+        accessible: accessible,
+        described_by: join_ids([assigns.blocked_by, accessible.description_id])
       )
 
     ~H"""
@@ -1205,7 +1344,8 @@ defmodule RiddlerLiveView.Components do
       value={@element["outcome"]}
       formnovalidate={not @validates}
       disabled={@blocked_by != nil}
-      aria-describedby={@blocked_by}
+      aria-label={@accessible.label}
+      aria-describedby={@described_by}
       data-riddler-blocked={@blocked_by}
       class={["riddler-button" | List.wrap(@class)]}
       data-riddler-element="button"
@@ -1215,7 +1355,7 @@ defmodule RiddlerLiveView.Components do
       data-riddler-style={@style}
     >
       {@element["label"]}
-    </button>
+    </button><.accessible_description :if={@shown} accessible={@accessible} />
     """
   end
 
@@ -1302,7 +1442,7 @@ defmodule RiddlerLiveView.Components do
   the host's submit. The module's "Elements of a kind the package does not draw" section says why.
 
   The notice's `id` is derived from `id_prefix` and the screen's `"key"`,
-  and `id_prefix` passes to every question.
+  and `id_prefix` passes to every element the package draws.
 
   Raises `ArgumentError` for a component map that names a kind the package
   draws, or whose value for a type is not a function of one argument: both
@@ -1424,11 +1564,11 @@ defmodule RiddlerLiveView.Components do
     assigns = assign(assigns, drawer: drawer(assigns.element, assigns.components))
 
     ~H"""
-    <.heading :if={@drawer == "heading"} element={@element} />
-    <.text :if={@drawer == "text"} element={@element} />
-    <.image :if={@drawer == "image"} element={@element} />
-    <.divider :if={@drawer == "divider"} element={@element} />
-    <.link :if={@drawer == "link"} element={@element} />
+    <.heading :if={@drawer == "heading"} element={@element} id_prefix={@id_prefix} />
+    <.text :if={@drawer == "text"} element={@element} id_prefix={@id_prefix} />
+    <.image :if={@drawer == "image"} element={@element} id_prefix={@id_prefix} />
+    <.divider :if={@drawer == "divider"} element={@element} id_prefix={@id_prefix} />
+    <.link :if={@drawer == "link"} element={@element} id_prefix={@id_prefix} />
     <.text_question
       :if={@drawer == "text_question"}
       element={@element}
@@ -1457,7 +1597,13 @@ defmodule RiddlerLiveView.Components do
       finding_text={@finding_text}
       id_prefix={@id_prefix}
     />
-    <.button :if={@drawer == "button"} element={@element} moves={@moves} blocked_by={@blocked_by} />
+    <.button
+      :if={@drawer == "button"}
+      element={@element}
+      moves={@moves}
+      blocked_by={@blocked_by}
+      id_prefix={@id_prefix}
+    />
     {if is_function(@drawer), do: host_component(@drawer, assigns)}
     """
   end
@@ -1522,6 +1668,35 @@ defmodule RiddlerLiveView.Components do
       {finding.text}
     </p>
     """
+  end
+
+  # An element's authored accessible description: a hidden text node the
+  # element names in its aria-describedby, and nothing where none is authored.
+  attr(:accessible, :map, required: true)
+
+  defp accessible_description(assigns) do
+    ~H"""
+    <span
+      :if={@accessible.description}
+      id={@accessible.description_id}
+      hidden
+      class="riddler-accessible-description"
+      data-riddler-accessible-description
+    >{@accessible.description}</span>
+    """
+  end
+
+  # The accessible label and description an element carries, each where it
+  # is a non-blank string, and the id its description is drawn with.
+  defp accessible(element, prefix) do
+    description = present_text(element["accessible_description"])
+
+    %{
+      label: present_text(element["accessible_label"]),
+      description: description,
+      description_id:
+        description && element_id(prefix, element["key"]) <> "-accessible-description"
+    }
   end
 
   defp element_findings(
