@@ -135,6 +135,42 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"elements of the kinds the package draws", drawn_elements([])},
       {"elements with a kind nothing draws", drawn_elements([%{"type" => "rating_question"}])},
       {"elements with a host's own kind", hosted_elements()},
+      {"every kind with an accessible label and description", accessible_elements()},
+      {"choice question, one, dropdown, with an accessible label, help and a finding",
+       choice_question(
+         %{
+           "style" => "dropdown",
+           "help" => "Ask.",
+           "accessible_label" => "Card type",
+           "accessible_description" => "Adult or child."
+         },
+         [finding("response.required", "card_type")]
+       )},
+      {"choice question, one, searchable, with an accessible label",
+       choice_question(%{"searchable" => true, "accessible_label" => "Card type"})},
+      {"text question, multiline, with an accessible label, a finding and help",
+       text_question(
+         %{
+           "format" => nil,
+           "style" => "multiline",
+           "help" => "Optional.",
+           "accessible_label" => "Notes for the desk",
+           "accessible_description" => "Read by staff only."
+         },
+         [finding("response.required", "reminder_email")]
+       )},
+      {"blocked button with an accessible description",
+       drawn_elements([
+         %{"type" => "rating_question"},
+         %{
+           "type" => "button",
+           "key" => "details_later",
+           "label" => "Later",
+           "outcome" => "details_submitted",
+           "accessible_label" => "Finish the details later",
+           "accessible_description" => "Keeps what you entered."
+         }
+       ])},
       {"journey on a screen with findings and back", journey(:screen)},
       {"journey waiting", journey(:waiting)},
       {"journey done", journey(:done)},
@@ -165,7 +201,12 @@ defmodule RiddlerLiveView.AccessibilityTest do
       {"a divider is an hr that keeps its separator role", &divider_is_separator/1},
       {"every option description is named by its option", &option_description_named/1},
       {"a list attribute names a datalist in the markup", &list_names_datalist/1},
-      {"a slider carries a min and a max", &slider_bounded/1}
+      {"a slider carries a min and a max", &slider_bounded/1},
+      {"an aria-label is not blank and sits on a node that takes a name",
+       &aria_label_on_named_node/1},
+      {"an accessible description is hidden text named last by its element",
+       &accessible_description_named/1},
+      {"a control named by aria-label is not also aria-labelledby", &label_not_overridden/1}
     ]
   end
 
@@ -191,7 +232,10 @@ defmodule RiddlerLiveView.AccessibilityTest do
     "a divider is an hr that keeps its separator role",
     "every option description is named by its option",
     "a list attribute names a datalist in the markup",
-    "a slider carries a min and a max"
+    "a slider carries a min and a max",
+    "an aria-label is not blank and sits on a node that takes a name",
+    "an accessible description is hidden text named last by its element",
+    "a control named by aria-label is not also aria-labelledby"
   ]
 
   for name <- @rule_names do
@@ -327,6 +371,24 @@ defmodule RiddlerLiveView.AccessibilityTest do
         ~s(<input class="a" type="range"/>),
         ~s(<input class="a" type="range" min="1"/>),
         ~s(<input class="a" type="range" max="10"/>)
+      ],
+      "an aria-label is not blank and sits on a node that takes a name" => [
+        ~s(<div class="a" aria-label="Email"><input class="b" id="e"/></div>),
+        ~s(<p class="a" aria-label="Reminders">Weekly.</p>),
+        ~s(<span class="a" aria-label="x">x</span>),
+        ~s(<input class="a" aria-label=""/>),
+        ~s(<button class="a" type="submit" aria-label="  ">Go</button>)
+      ],
+      "an accessible description is hidden text named last by its element" => [
+        ~s(<input class="a"/><span id="d" hidden class="d" data-riddler-accessible-description>More.</span>),
+        ~s(<input class="a" aria-describedby="d h"/><p id="h">x</p><span id="d" hidden class="d" data-riddler-accessible-description>More.</span>),
+        ~s(<input class="a" aria-describedby="d"/><span id="d" class="d" data-riddler-accessible-description>More.</span>),
+        ~s(<input class="a" aria-describedby="d"/><span id="d" hidden class="d" data-riddler-accessible-description> </span>),
+        ~s(<span hidden class="d" data-riddler-accessible-description>More.</span>)
+      ],
+      "a control named by aria-label is not also aria-labelledby" => [
+        ~s(<legend id="l">Card</legend><select class="a" aria-label="Card type" aria-labelledby="l"></select>),
+        ~s(<legend id="l">Card</legend><input class="a" aria-labelledby="l" aria-label="Card type"/>)
       ]
     }
 
@@ -345,7 +407,7 @@ defmodule RiddlerLiveView.AccessibilityTest do
 
   # Sabotage: drop the class attribute from the text component's <p>.
   defp component_has_class(html) do
-    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held|legend|option|back|finding|focus|unknown|journey|waiting|done)\b[^>]*)>/
+    ~r/<[a-z0-9]+\b([^>]*\bdata-riddler-(?:element|screen|title|progress|elements|label|input|help|held|legend|option|back|finding|focus|unknown|journey|waiting|done|accessible-description)\b[^>]*)>/
     |> Regex.scan(html, capture: :all_but_first)
     |> List.flatten()
     |> Enum.reject(&(&1 =~ ~r/\sclass="[^"\s][^"]*"/))
@@ -508,7 +570,51 @@ defmodule RiddlerLiveView.AccessibilityTest do
         nil -> false
       end
 
-    by_label or by_text
+    by_label or by_text or attrs =~ ~r/\saria-label="[^"\s][^"]*"/
+  end
+
+  @named_tags ~w(h1 h2 h3 h4 h5 h6 img hr a button input textarea select fieldset progress)
+
+  # Sabotage: draw the text question's aria-label on its wrapper div instead of its input.
+  defp aria_label_on_named_node(html) do
+    ~r/<([a-z0-9]+)\b([^>]*\saria-label="([^"]*)"[^>]*)>/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> Enum.reject(fn [tag, _attrs, label] ->
+      tag in @named_tags and String.trim(label) != ""
+    end)
+  end
+
+  # Sabotage: drop the description id from the text question's aria-describedby.
+  defp accessible_description_named(html) do
+    last_named =
+      ~r/aria-describedby="([^"]*)"/
+      |> Regex.scan(html, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.flat_map(&(&1 |> String.split() |> Enum.take(-1)))
+
+    ~r{<([a-z]+)\b([^>]*\sdata-riddler-accessible-description\b[^>]*)>(.*?)</\1>}s
+    |> Regex.scan(html, capture: :all_but_first)
+    |> Enum.reject(fn [_tag, attrs, text] ->
+      id = attr_id(attrs)
+
+      id != nil and id in last_named and attrs =~ ~r/\shidden(?:[\s=>]|$)/ and
+        String.trim(text) != ""
+    end)
+  end
+
+  defp attr_id(attrs) do
+    case Regex.run(~r/\sid="([^"]+)"/, attrs) do
+      [_, id] -> id
+      nil -> nil
+    end
+  end
+
+  # Sabotage: keep aria-labelledby on the select when the question carries a label.
+  defp label_not_overridden(html) do
+    ~r/<[a-z]+\b([^>]*)>/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.filter(&(&1 =~ ~r/\saria-label="/ and &1 =~ ~r/\saria-labelledby="/))
   end
 
   # Sabotage: label the section with a title id the <h1> does not carry.
@@ -757,6 +863,91 @@ defmodule RiddlerLiveView.AccessibilityTest do
     rendered_to_string(~H"""
     <Components.frame screen={@screen}>
       <Components.elements screen={@screen} moves={@moves} />
+    </Components.frame>
+    """)
+  end
+
+  # One element of every kind the package draws, each with an authored
+  # accessible label and description.
+  defp accessible_elements do
+    a11y = fn element, label ->
+      Map.merge(element, %{
+        "accessible_label" => label,
+        "accessible_description" => "More about #{element["key"]}."
+      })
+    end
+
+    assigns = %{
+      screen: %{
+        "key" => "details",
+        "title" => "Patron registration",
+        "elements" => [
+          a11y.(
+            %{"type" => "heading", "key" => "details_heading", "level" => 2, "text" => "Details"},
+            "Your details"
+          ),
+          a11y.(%{"type" => "text", "key" => "address_note", "text" => "Your address."}, "Note"),
+          a11y.(
+            %{"type" => "image", "key" => "branch_photo", "src" => "/r.png", "alt" => ""},
+            "The Riverside branch"
+          ),
+          a11y.(%{"type" => "divider", "key" => "details_rule"}, "End of the details"),
+          a11y.(
+            %{
+              "type" => "link",
+              "key" => "lending_rules",
+              "label" => "Rules",
+              "href" => "/lending-rules"
+            },
+            "Read the lending rules"
+          ),
+          a11y.(
+            %{
+              "type" => "text_question",
+              "key" => "reminder_email",
+              "label" => "Email",
+              "help" => "Weekly."
+            },
+            "Email for reminders"
+          ),
+          a11y.(
+            %{"type" => "secret_question", "key" => "card_pin", "label" => "PIN", "held" => true},
+            "Card PIN"
+          ),
+          a11y.(
+            %{
+              "type" => "choice_question",
+              "key" => "card_type",
+              "label" => "Card",
+              "select" => "one",
+              "help" => "Ask.",
+              "answer_options" => described_options()
+            },
+            "Card type"
+          ),
+          a11y.(
+            %{"type" => "boolean_question", "key" => "agrees_to_rules", "label" => "I agree."},
+            "I agree to the lending rules"
+          ),
+          a11y.(
+            %{
+              "type" => "button",
+              "key" => "details_continue",
+              "label" => "Continue",
+              "outcome" => "details_submitted"
+            },
+            "Continue to the card"
+          )
+        ]
+      },
+      moves: %{"outcomes" => ["details_submitted"], "back" => true},
+      findings: [finding("response.required", "reminder_email")]
+    }
+
+    rendered_to_string(~H"""
+    <Components.frame screen={@screen} findings={@findings}>
+      <Components.elements screen={@screen} moves={@moves} findings={@findings} />
+      <Components.back screen={@screen} moves={@moves} />
     </Components.frame>
     """)
   end
