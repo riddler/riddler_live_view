@@ -261,7 +261,7 @@ would show for a link to no Journey at all.
 
 ## Amendment, 2026-11-26: a datetime question is drawn in the visitor's time zone, which the host supplies
 
-Status: proposed
+Status: accepted (2026-11-27, riddler_live_view 0.1.0)
 
 That the host supplies the visitor's time zone and that this package adds
 the offset, recorded as an Amendment on this record before 0.1.0, was ruled
@@ -365,3 +365,114 @@ refused by riddler with `response.out_of_range`, drawn beside the question.
 A reminder set for `2026-03-08T02:30`, a time the clocks in Denver skip, is
 handed on as `2026-03-08T02:30-07:00`; one set for `2026-11-01T01:30`, a
 time they pass twice, as `2026-11-01T01:30-06:00`.
+
+---
+
+Noted 2026-11-27. What the code on `main` at `75dcd42`, the commit tagged
+`v0.1.0` and published on Hex as riddler_live_view 0.1.0, does with the
+component map, with a screen nothing can draw in full, and with a host or an
+access module that fails at the component's boundary. Nothing above is
+changed, and this note decides nothing: each paragraph says what the code
+does where the record above leaves a question open or names where a thing
+lives.
+
+**The component map may not name a kind the package draws.** "What this does
+not decide" leaves open whether the component map may replace a kind the
+package renders. It may not. `RiddlerLiveView.Components.elements/1` and
+`RiddlerLiveView.Components.unknown_kinds/2` raise `ArgumentError` for a
+component map that names a kind the package draws, for an entry that is not a
+string type paired with a function of one argument, and for a `components`
+value that is not a map, each as a host's wiring and never a visitor's input
+(the documentation of both functions, and the private `check_components!/1`
+in `RiddlerLiveView.Components`). `RiddlerLiveView.Journey` does not catch
+that raise (its moduledoc, "A host that answers outside its contract").
+
+**How an unknown kind blocks the submit.** "What this does not decide" leaves
+open how the fallback tells the visitor that a screen cannot be submitted.
+Where a screen carries an element whose kind neither the package nor the
+component map draws, `RiddlerLiveView.Components.elements/1` draws a notice
+above the elements, a paragraph with `role="status"` carrying
+`data-riddler-unknown`, in the package's own sentence or the host's
+`unknown_text`, and every button it draws through
+`RiddlerLiveView.Components.button/1` is drawn `disabled`, names the notice in
+its `aria-describedby` and carries `data-riddler-blocked`. A disabled button
+is the browser's to honour, so `RiddlerLiveView.Components.unknown_kinds/2`
+answers the kinds nothing draws as the server-side check, and
+`RiddlerLiveView.Journey` refuses a submit of such a screen whatever the
+browser sends (`handle_event/3` for `"submit"`; its moduledoc, "A submit").
+Decision 4's sentences hold as written.
+
+**Where the component map is passed.** Decision 4 makes the component map an
+option of `RiddlerLiveView.Journey`, and it is one: the Journey's
+`components` assign. The map is read by
+`RiddlerLiveView.Components.elements/1`, whose `components` attribute it is,
+and the Journey passes its assign through to that attribute when it draws a
+screen (`RiddlerLiveView.Journey.render/1`) and to `unknown_kinds/2` on a
+submit. A host that lays out a screen of its own with the function components
+passes the map to `elements/1` itself.
+
+**A host or an access module that fails at the boundary.** The record does
+not say what `RiddlerLiveView.Journey` does when a host callback or the
+access module's check raises, throws or exits. It catches each at the
+component's boundary (the private `guarded/2` in `RiddlerLiveView.Journey`).
+On the host's `present/1` and on the access check it fails closed and draws
+the one refusal Decision 3 names; on the host's `submit/2` and `back/2` it
+keeps what is drawn. Either way it logs one error line naming the callback and
+the kind of failure, the exception's module, `threw` or `exited`, and never
+the exception's message, the answer or the event's parameters (its moduledoc,
+"A host that answers outside its contract").
+
+---
+
+Noted 2026-11-27. The amendment above headed "a datetime question is drawn in
+the visitor's time zone, which the host supplies" moves from `proposed` to
+`accepted`, its Status line flipped in place and nothing else in it reworded.
+The record's own Status stays proposed and is not flipped by this note, and
+its row in `docs/adr/README.md` is unchanged. The flip was decided by the
+conductor under a standing consent, 2026-11-27.
+
+It shipped in riddler_live_view 0.1.0, the commit tagged `v0.1.0`
+(`75dcd42`) and published on Hex; its code half is `b09f63a`, the commit that
+added it. It was re-verified at the tag, which is `main`. What was read:
+
+- The attribute: `RiddlerLiveView.Journey` takes a `time_zone` assign, and
+  `RiddlerLiveView.Components.text_question/1` and
+  `RiddlerLiveView.Components.elements/1` take a `time_zone` attribute. The
+  zone is resolved by `DateTime.shift_zone/2` through the configured
+  database (`RiddlerLiveView.LocalTime.zone/1`), and `deps/0` in `mix.exs`
+  adds no time zone database.
+- What is drawn: with a zone the database resolves, a `datetime` question is
+  an `<input type="datetime-local">`; its value, `min` and `max` are drawn as
+  the wall times they are in the zone, with seconds where the presented text
+  carries them and `step="1"` where any does; a value or bound not in
+  riddler's shape, or outside four-digit years in the zone, is not drawn
+  (`RiddlerLiveView.LocalTime.local/2`).
+- Where the offset is added: `RiddlerLiveView.Journey`'s submit adds it to
+  the response of a presented `datetime` `text_question` before
+  `Riddler.Journey.decode_submit/1` and the host's `submit/2`
+  (`RiddlerLiveView.LocalTime.instant/2`), `Z` for a zero offset and no
+  fraction of a second; an empty field, a value with an offset, a fraction
+  of a second, a date that does not exist and text that is not a wall time
+  are handed on unchanged.
+- The gap and the overlap: a wall time the zone skips takes the offset in
+  force before the change, and one it passes twice the first offset (the
+  private `offset_at/2` in `RiddlerLiveView.LocalTime`).
+- With no zone, or one the database does not resolve, the question is the
+  plain text input with no bounds and its value is handed on as typed.
+- What is unchanged holds: a host's own component is called with `element`,
+  `moves`, `findings`, `finding_text` and `blocked_by` and no zone, and the
+  `date` and `time` formats are drawn and submitted as before.
+- The worked example is the suite's: `test/riddler_live_view/journey_test.exs`
+  at `75dcd42` draws `min="2026-11-27T09:00"` and `max="2026-11-27T18:00"`,
+  hands on `2026-11-27T10:00-07:00`, has `2026-11-27T08:59` refused by
+  `Riddler.Screens.validate_screen/4` with `response.out_of_range`, and hands
+  on `2026-03-08T02:30-07:00` and `2026-11-01T01:30-06:00`; the suite is
+  green in CI at that commit.
+- The context's cite, rd-ADR-0002's Amendment of 2026-11-24 and its "The date
+  and time formats", reads as quoted at riddler's `v0.9.0`, the version
+  `mix.exs` requires (`~> 0.9`).
+
+One sentence is read, not changed: the amendment's opening calls its own
+parts written "at `proposed`", and says the code it describes is not on
+`main` when it is written. It was written so; the code is on `main` at
+`b09f63a`, and the amendment now reads accepted, by this note.
