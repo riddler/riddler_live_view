@@ -180,6 +180,26 @@ defmodule RiddlerLiveView.JourneyTest do
       end
     end
 
+    # Not a callback of riddler's behaviour: the function a host hands the
+    # component as `re_present`. It presents where the Journey is with the
+    # draft's responses beside the ones held, and keeps nothing.
+    def re_present(journey, draft),
+      do: misbehave(:re_present, draft, fn -> keep_re_present(journey, draft) end)
+
+    defp keep_re_present(journey, draft) do
+      send(self(), {:host, :re_present, journey, draft})
+
+      case Process.get({:journey, journey}) do
+        nil ->
+          {:error, :no_such_journey}
+
+        engine ->
+          held = Map.get(engine.root, "responses", %{})
+          root = Map.put(engine.root, "responses", Map.merge(held, draft["responses"]))
+          {:ok, answer(%{engine | root: root})}
+      end
+    end
+
     # A test sets {:misbehave, callback} to make the host answer outside its
     # contract; the raise carries what the host was handed, as a careless
     # host's match error would.
@@ -1311,6 +1331,294 @@ defmodule RiddlerLiveView.JourneyTest do
                ~r/<input type="datetime-local" id="registration-element-pickup_at"[^>]* min="2026-11-27T09:00" max="2026-11-27T18:00"/
 
       refute mount_booking(nil) |> html() =~ "datetime-local"
+    end
+  end
+
+  describe "a re-present" do
+    # A branch library's sign-up: a patron who already holds a card at
+    # another branch ticks so, and only then is offered to link that card,
+    # a button whose condition reads the box ticked on the same screen.
+    @card_choice %{
+      "schema_version" => 2,
+      "id" => "card_choice",
+      "screens" => [
+        %{
+          "key" => "card_choice",
+          "title" => "Your library card",
+          "elements" => [
+            %{
+              "type" => "text_question",
+              "key" => "reminder_email",
+              "label" => "Email for due-date reminders",
+              "format" => "email"
+            },
+            %{
+              "type" => "secret_question",
+              "key" => "card_pin",
+              "label" => "Choose a PIN for your card"
+            },
+            %{
+              "type" => "boolean_question",
+              "key" => "holds_card",
+              "label" => "I already hold a card at another branch"
+            },
+            %{
+              "type" => "text_question",
+              "key" => "pickup_at",
+              "label" => "Preferred pickup appointment",
+              "format" => "datetime"
+            },
+            %{
+              "type" => "choice_question",
+              "key" => "pickup_branch",
+              "label" => "Which branch?",
+              "answer_options" => [
+                %{"value" => "riverside", "label" => "Riverside"},
+                %{"value" => "central", "label" => "Central"}
+              ]
+            },
+            %{
+              "type" => "button",
+              "key" => "link_card",
+              "label" => "Link my card",
+              "outcome" => "card_linked",
+              "condition" => "responses.holds_card == true"
+            },
+            %{
+              "type" => "button",
+              "key" => "new_card",
+              "label" => "Get a new card",
+              "outcome" => "card_requested"
+            }
+          ]
+        },
+        %{
+          "key" => "card_pickup",
+          "title" => "Pick up your card",
+          "elements" => [
+            %{"type" => "text", "key" => "pickup_note", "text" => "Bring a proof of address."}
+          ]
+        }
+      ]
+    }
+
+    @linking %{"riddler-screen" => "card_choice", "holds_card" => "true"}
+
+    defp mount_choice(assigns \\ %{}) do
+      put_engine("J-8", %{
+        document: Document.admit(@card_choice),
+        status: {:screen, "card_choice"},
+        root: %{}
+      })
+
+      mount_journey(
+        Map.merge(%{journey: "J-8", re_present: &RegistrationHost.re_present/2}, assigns)
+      )
+    end
+
+    defp press(socket, outcome, fields \\ %{}) do
+      event(
+        socket,
+        "submit",
+        Map.merge(%{"riddler-screen" => "card_choice", "outcome" => outcome}, fields)
+      )
+    end
+
+    # Mutation: draw phx-change whatever re_present holds - goes red.
+    test "with no re_present, the form carries no change event and a change calls nothing" do
+      socket = mount_choice(%{re_present: nil})
+      html = html(socket)
+
+      refute html =~ "phx-change"
+      assert html =~ ~s(phx-submit="submit")
+
+      changed = event(socket, "change", @linking)
+
+      assert changed.assigns == socket.assigns
+      refute_received {:host, :re_present, _journey, _draft}
+      assert mount_choice() |> html() =~ ~s(phx-change="change")
+    end
+
+    # Mutation: handle the change event as a no-op - goes red.
+    test "draws the button a same-screen condition reveals, and its submit reaches the host" do
+      socket = mount_choice()
+      assert_received {:host, :present, "J-8"}
+
+      refute html(socket) =~ ~s(data-riddler-outcome="card_linked")
+      assert press(socket, "card_linked", %{"holds_card" => "true"}).assigns == socket.assigns
+      refute_received {:host, :submit, _journey, _submit}
+
+      socket = event(socket, "change", @linking)
+
+      assert_received {:host, :re_present, "J-8",
+                       %{"screen" => "card_choice", "responses" => %{"holds_card" => true}}}
+
+      assert html(socket) =~ ~s(data-riddler-outcome="card_linked")
+      assert "card_linked" in socket.assigns.answer["moves"]["outcomes"]
+      refute_received {:host, :submit, _journey, _submit}
+      refute_received {:host, :present, _journey}
+
+      press(socket, "card_linked", %{"holds_card" => "true"})
+
+      assert_received {:host, :submit, "J-8",
+                       %{"outcome" => "card_linked", "responses" => %{"holds_card" => true}}}
+    end
+
+    # Mutation: keep the revealed moves after a re-present that hides them - goes red.
+    test "still refuses an outcome the re-presented screen does not reveal" do
+      socket =
+        mount_choice()
+        |> event("change", @linking)
+        |> event("change", %{"riddler-screen" => "card_choice"})
+
+      assert_received {:host, :re_present, "J-8", %{"responses" => %{"holds_card" => false}}}
+      refute html(socket) =~ ~s(data-riddler-outcome="card_linked")
+
+      assert press(socket, "card_linked").assigns == socket.assigns
+      refute_received {:host, :submit, _journey, _submit}
+    end
+
+    # Mutation: skip the access check before re_present - goes red.
+    test "asks the access check with :present before the host, and refuses once revoked" do
+      socket = mount_choice()
+      assert_received {:access, :present}
+
+      event(socket, "change", @linking)
+      assert_received {:access, :present}
+      assert_received {:host, :re_present, "J-8", _draft}
+
+      Process.put({:revoked, "P-1001"}, true)
+      refused = event(socket, "change", @linking)
+
+      refute_received {:host, :re_present, _journey, _draft}
+      assert html(refused) =~ "data-riddler-refused"
+      refute html(refused) =~ "card_choice"
+    end
+
+    # Mutation: hand the secret question's value on in the draft - goes red.
+    test "hands no secret to the host, keeps typed values drawn and drops a refusal's findings" do
+      socket = press(mount_choice(), "card_requested", %{"reminder_email" => "ada"})
+      assert [_finding] = socket.assigns.findings
+
+      fields = %{
+        "reminder_email" => "ada@example.org",
+        "riddler-password" => %{"card_pin" => @sentinel}
+      }
+
+      refusals = socket.assigns.refusals
+      socket = event(socket, "change", Map.merge(@linking, fields))
+
+      assert_received {:host, :re_present, "J-8", %{"responses" => responses}}
+      assert responses == %{"reminder_email" => "ada@example.org", "holds_card" => true}
+
+      html = html(socket)
+      assert html =~ ~s(value="ada@example.org")
+      assert html =~ ~r/<input type="checkbox"[^>]*checked/
+      refute html =~ @sentinel
+      refute inspect(socket.assigns) =~ @sentinel
+      assert socket.assigns.findings == []
+      assert socket.assigns.refusals == refusals
+    end
+
+    # Mutation: build the draft without the visitor's offset - goes red.
+    test "hands the draft a datetime with the visitor's offset, and draws a choice from it" do
+      {:ok, held} =
+        Riddler.Journey.present(Document.admit(@card_choice), {:screen, "card_choice"}, %{})
+
+      fields = %{
+        "riddler-screen" => "card_choice",
+        "pickup_at" => "2026-11-27T10:00",
+        "pickup_branch" => "central"
+      }
+
+      socket = mount_choice(%{time_zone: "America/Denver"}) |> event("change", fields)
+
+      assert_received {:host, :re_present, "J-8", %{"responses" => responses}}
+      assert responses["pickup_at"] == "2026-11-27T10:00-07:00"
+      assert responses["pickup_branch"] == "central"
+
+      Process.put({:misbehave, :re_present}, {:answer, {:ok, held}})
+      html = socket |> event("change", fields) |> html()
+
+      assert html =~ ~r/<input type="radio"[^>]*value="central"[^>]*checked/
+      assert html =~ ~s(value="2026-11-27T10:00")
+    end
+
+    # Mutation: draw the host's answer without the draft's values - goes red.
+    test "draws the draft's values where the host's answer does not carry them" do
+      {:ok, held} =
+        Riddler.Journey.present(Document.admit(@card_choice), {:screen, "card_choice"}, %{})
+
+      Process.put({:misbehave, :re_present}, {:answer, {:ok, held}})
+      fields = Map.put(@linking, "reminder_email", "ada@example.org")
+      html = mount_choice() |> event("change", fields) |> html()
+
+      assert html =~ ~s(value="ada@example.org")
+      assert html =~ ~r/<input type="checkbox"[^>]*checked/
+    end
+
+    # Mutation: draw a re-presented screen of another key - goes red.
+    test "keeps what is drawn for an answer outside the hook's contract, and logs no draft" do
+      socket = mount_choice()
+
+      {:ok, pickup} =
+        Riddler.Journey.present(Document.admit(@card_choice), {:screen, "card_pickup"}, %{})
+
+      answers = [
+        {:answer, {:ok, pickup}},
+        {:answer, {:ok, %{"state" => "waiting"}}},
+        {:answer, {:ok, %{"state" => "screen", "screen" => %{"key" => "card_choice"}}}},
+        {:answer, :ok},
+        :raise,
+        :throw,
+        :exit
+      ]
+
+      for misbehave <- answers do
+        Process.put({:misbehave, :re_present}, misbehave)
+
+        log =
+          capture_log(fn ->
+            kept = event(socket, "change", Map.put(@linking, "reminder_email", @sentinel))
+            assert kept.assigns == socket.assigns
+          end)
+
+        assert log =~ "RiddlerLiveView.Journey: the host's re_present"
+        refute log =~ @sentinel
+      end
+    end
+
+    # Mutation: keep what is drawn when re_present answers no_such_journey - goes red.
+    test "draws the refusal when re_present answers that the host does not have the Journey" do
+      socket = mount_choice()
+      Process.put({:misbehave, :re_present}, {:answer, {:error, :no_such_journey}})
+      refused = event(socket, "change", @linking)
+
+      assert refused.assigns.refused
+      assert html(refused) =~ "data-riddler-refused"
+    end
+
+    # Mutation: drop the same-screen check on the change event - goes red.
+    test "refuses a change from another screen, or while no screen is drawn" do
+      socket = mount_choice()
+
+      assert event(socket, "change", %{@linking | "riddler-screen" => "card_pickup"}).assigns ==
+               socket.assigns
+
+      assert event(socket, "change", Map.delete(@linking, "riddler-screen")).assigns ==
+               socket.assigns
+
+      put_engine("J-8", %{engine("J-8") | status: :done})
+      done = mount_journey(%{journey: "J-8", re_present: &RegistrationHost.re_present/2})
+      assert event(done, "change", @linking).assigns == done.assigns
+      refute_received {:host, :re_present, _journey, _draft}
+    end
+
+    # Mutation: accept a re_present of any arity - goes red.
+    test "raises ArgumentError for a re_present that is not a function of two arguments" do
+      for bad <- [fn _draft -> :ok end, RegistrationHost, "re_present"] do
+        assert_raise ArgumentError, ~r/:re_present/, fn -> mount_choice(%{re_present: bad}) end
+      end
     end
   end
 end

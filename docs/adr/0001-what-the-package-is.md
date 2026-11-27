@@ -476,3 +476,154 @@ One sentence is read, not changed: the amendment's opening calls its own
 parts written "at `proposed`", and says the code it describes is not on
 `main` when it is written. It was written so; the code is on `main` at
 `b09f63a`, and the amendment now reads accepted, by this note.
+
+---
+
+## Amendment, 2026-11-27: the Journey re-presents a screen for the visitor's unsent typing, through a function the host supplies
+
+Status: proposed
+
+That `RiddlerLiveView.Journey` gains a re-present hook of its own, released
+in 0.2.0, with riddler unchanged, was ruled by the operator, 2026-11-27. The
+hook's shape, what it is handed, what is drawn from its answer, where the
+access check is asked, the submit after it and the rate are this entry's
+own, written 2026-11-27 at `proposed`.
+
+Every cite of riddler here is of the riddler-ex repository at the tag
+`v0.9.0`, the commit published on Hex as riddler 0.9.0, the version
+`mix.exs` requires. The code this entry describes is not on `main` when it
+is written, so it is cited by module and function name, not by commit.
+
+### Context
+
+An element's `"condition"` may read a response given on the same screen.
+riddler resolves a screen when it is presented (`Riddler.Journey.present/3`),
+so an element whose condition reads a response the visitor has typed but not
+sent stays as the last presentation drew it. In 0.1.0 the Journey handles two
+events, `"submit"` and `"back"` (`RiddlerLiveView.Journey.handle_event/3`),
+and refuses a submit whose outcome the presented moves do not list (its
+moduledoc, "A submit"). A button that only a same-screen response reveals is
+therefore never drawn and, sent by hand, refused: a sign-up screen that
+offers a choice only once a number typed on it meets the choice's condition
+shows the visitor nothing to press but Back. A host that draws the screen
+itself works round this by resolving the screen again against its draft on
+every change; a host on the Journey cannot.
+
+`Riddler.Journey.Host` names four callbacks, and riddler is not changed by
+this entry, so the hook is this package's own.
+
+### What the record now decides
+
+**The hook's shape.** `RiddlerLiveView.Journey` takes an optional
+`re_present` assign: a function of two arguments, the Journey's name and the
+draft, answering `{:ok, answer}` with the answer `Riddler.Journey.present/3`
+gives, or `{:error, :no_such_journey}`. An assign rather than an optional
+callback detected on the host module, because the host opts in where it
+embeds the component and nowhere else: a host module that happens to define
+a function of the same name changes nothing, riddler's behaviour gains no
+callback this package calls, and a host may pass a different function for
+the same host module on another page. A `re_present` that is neither nil nor
+a function of two arguments raises `ArgumentError` when the component
+mounts, as the host's wiring, as Decision 3's missing access module does.
+
+**With none supplied.** Where `re_present` is nil, the default, the form
+carries no `phx-change`, the browser sends no change event, and the
+component draws and does exactly what 0.1.0 does. A change event that
+arrives anyway calls nothing and changes nothing.
+
+**What the hook is handed.** The draft is a map of `"screen"`, the key of
+the screen drawn, and `"responses"`, built from the form by the same code a
+submit's responses are built by: a response for each question presented,
+keyed by its key, a boolean as `true` or `false`, a many choice with nothing
+ticked as `[]`, a host kind's value where the component map names the kind,
+and a datetime question's wall time with the visitor's offset added
+(`RiddlerLiveView.LocalTime.instant/2`), so a host's conditions read the
+values a submit would carry. Every secret question is left out of the draft:
+a draft is sent on each change, and a secret is handed to the host only by a
+submit. The browser still sends the whole form, the secret field included,
+with every change event, as LiveView sends a form, so the component reads the
+secret on each change and drops it there; it keeps it in no assign, and a
+re-presented answer's secret question is drawn with no value whatever the
+draft carries. `Riddler.Journey.decode_submit/1` is not asked: it checks the shape
+of `"screen"`, `"outcome"` and `"responses"`, a draft carries no outcome, and
+its screen and responses are of that shape by construction. A value that is
+not in riddler's shape for its question, a datetime that is not a wall time
+included, is handed on as typed, as a submit hands it on; a draft is not
+validated, and how a condition reads such a value is riddler's.
+
+**What is drawn from the answer.** Before the hook is called the change
+event must name the screen drawn, as a submit must; one from another screen,
+or one while no screen is drawn, calls nothing. An answer `{:ok, answer}`
+whose answer is a screen with the key of the screen drawn, and which passes
+the shape check and the render probe a `present/1` answer passes, is drawn
+in place of the screen drawn. The draft's values are drawn in its questions,
+a question's `"value"` set to the draft's response for it, so that drawing
+the form again resets no input the visitor has typed in: LiveView keeps the
+value of the focused input only. The findings of an earlier refusal are not
+drawn again, since a draft is not validated, and the count of refusals is
+unchanged. An answer `{:error, :no_such_journey}` draws the one refusal.
+Any other answer, a screen of another key, a waiting or a done answer, a
+misshapen answer, and a raise, throw or exit included, keeps what is drawn
+and logs the one line the moduledoc names for a host outside its contract,
+naming `the host's re_present` and never the draft: a re-present steps
+nothing, so an answer that would move the Journey is outside its contract,
+and keeping what is drawn loses the visitor nothing.
+
+**The access check.** A re-present asks `Riddler.Journey.Access.check/4`
+with `:present`, the operation riddler names for showing the Journey, and
+the scope held since the mount, before the hook is called. A refused check
+draws the one refusal and calls no hook, as on mount, so a re-present never
+shows a screen the actor may not see and a membership revoked while the
+Journey is open is refused at the next change event. riddler's operations are
+`:present`, `:submit` and `:back`, and this entry adds none. Decision 3's
+table gains a row:
+
+| When | Operation | Asked before |
+|---|---|---|
+| on every change event, where the host supplies `re_present` | `:present` | the host's `re_present` function is called |
+
+**The submit after a re-present.** The answer drawn after a re-present is
+the answer a submit is checked against, so a button the re-presented screen
+shows and whose outcome its moves list is pressed and handed to the host's
+`submit/2` as any other, and an outcome it does not list is still refused
+with no host callback called. The host validates the submit as before, so a
+button revealed by the draft is accepted only where the submitted responses
+reveal it too.
+
+**The rate.** One re-present per change event the browser sends. No
+`phx-debounce` is drawn and there is no attribute for one: debounce is set
+on each input in LiveView, and the inputs are drawn by the components, so an
+attribute would reach every component. A hook that reads and resolves, as
+the worked example's does, is quick enough for a change event per input.
+
+### What is unchanged
+
+- riddler, and `Riddler.Journey.Host`'s four callbacks: the hook is this
+  package's, and no riddler release is made for it.
+- A submit and a back request, handled and checked as before.
+- A host that supplies no `re_present`: no change event, and nothing drawn
+  that 0.1.0 does not draw.
+- Decision 1: the hook steps nothing and stores nothing, and the component
+  holds no response beyond the answer it is showing; after a re-present that
+  answer carries the draft's values, never a secret question's, until the
+  next answer replaces it.
+
+### Worked example
+
+**Patron registration, a card held at another branch.** A branch library's
+sign-up screen `card_choice` asks for an email for due-date reminders, a
+PIN, and a boolean question `holds_card`, "I already hold a card at another
+branch", and carries two buttons: "Link my card", whose outcome is
+`card_linked` and whose condition is `responses.holds_card == true`, and
+"Get a new card", `card_requested`, with no condition. Presented on mount,
+the screen shows "Get a new card" only, its moves list `card_requested`, and
+a submit naming `card_linked` is refused without the host's `submit/2` being
+called. The host passes `re_present`. The patron types an email and a PIN
+and ticks the box; the host's function is handed
+`%{"screen" => "card_choice", "responses" => %{"reminder_email" =>
+"ada@example.org", "holds_card" => true}}`, with no PIN, and answers the
+screen presented against that draft. "Link my card" is drawn, with the
+email still in its input and the box still ticked; the patron presses it,
+and the host's `submit/2` is handed the outcome `card_linked`. A patron who
+unticks the box before pressing has the screen drawn without the button
+again, and a submit naming `card_linked` is refused.

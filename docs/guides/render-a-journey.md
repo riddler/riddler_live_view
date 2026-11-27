@@ -214,6 +214,61 @@ declares `validates: false` carries `formnovalidate`, so the browser's checks
 do not stop it; [Offer an authored skip](offer-an-authored-skip.md) shows
 one.
 
+## Show what the visitor's typing reveals on the same screen
+
+An element's `"condition"` can read a response given on the same screen: a
+patron who ticks "I already hold a card at another branch" is offered "Link
+my card", a button whose condition is `responses.holds_card == true`. riddler
+resolves a screen when it is presented, so without more the button stays
+hidden until a submit, and the component refuses an outcome it did not
+present. Pass `re_present`, a function of the Journey's name and the draft,
+and the component asks it each time the form changes:
+
+```heex
+<.live_component
+  module={RiddlerLiveView.Journey}
+  id="registration"
+  journey={@journey}
+  host={Library.RegistrationHost}
+  access={Library.PatronAccess}
+  actor={@patron_id}
+  re_present={&Library.RegistrationHost.re_present/2}
+/>
+```
+
+The draft is `%{"screen" => key, "responses" => responses}`: the screen
+drawn, and the responses a submit of the form would carry, built the same way,
+with every secret question left out. Answer as your `present/1` would, for
+where the Journey is with the draft's responses beside the ones already given,
+and keep nothing:
+
+```elixir
+def re_present(journey, %{"responses" => draft}) do
+  with {:ok, execution} <- Library.Executions.fetch(journey),
+       root = Library.Executions.with_responses(execution, draft),
+       {:ok, answer} <-
+         Journey.present(execution.document, execution.status, root) do
+    {:ok, answer}
+  else
+    _missing -> {:error, :no_such_journey}
+  end
+end
+```
+
+The component asks the access check with `:present` before each call, draws
+your screen in place of the one drawn with what the visitor typed kept in its
+inputs, and from then on accepts a press of any button your screen shows. A
+re-present steps nothing: your `submit/2` is called only when a button is
+pressed. An answer for another screen, a waiting or a done answer, or anything
+else outside the contract keeps what is drawn. Without `re_present` the form
+sends no change event at all, as before.
+
+Each change event asks your function once, typing in a secret question's
+field included; the component draws no `phx-debounce`, so keep the function
+to a read and a resolve. The browser sends the whole form with each change,
+as LiveView does, so a secret reaches the component on every change; the
+component drops it before your function is called and keeps it nowhere.
+
 ## Give the visitor's time zone for a datetime question
 
 riddler's datetime format is an instant: a date and a time, then `Z` or an

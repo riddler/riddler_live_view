@@ -48,6 +48,11 @@ defmodule RiddlerLiveView.Journey do
     * `id_prefix` - the prefix of every `id` the markup derives, in place of
       `id`.
     * `class` - classes added to the component's own.
+    * `re_present` - optional, a function of two arguments the host supplies
+      to answer the screen drawn again for what the visitor has typed but
+      not sent, as "A re-present" says. Where it is nil, the default, the
+      form carries no change event and nothing is drawn again before a
+      submit.
 
   `send_update(RiddlerLiveView.Journey, id: id, refresh: true)` asks the
   host again where the Journey is and draws the answer; any other update
@@ -84,6 +89,8 @@ defmodule RiddlerLiveView.Journey do
     * with `:present`, after `present/1` answers and before anything of the
       answer is drawn: on mount, on a refresh and on each retry of a
       waiting answer;
+    * with `:present`, before every call of the host's `re_present`
+      function, as "A re-present" says;
     * with `:submit`, before every call of the host's `submit/2`;
     * with `:back`, before every call of the host's `back/2`.
 
@@ -124,7 +131,8 @@ defmodule RiddlerLiveView.Journey do
       it draws it.
 
   On `present/1` and on the access check the component draws the refusal;
-  on `submit/2` and `back/2` it keeps what is drawn. Either way it logs one
+  on `submit/2`, `back/2` and the host's `re_present` function it keeps what
+  is drawn. Either way it logs one
   error line naming the callback and the kind of failure, the exception's
   module, `threw`, `exited` or that the answer is outside its contract, and
   never the exception's message, the answer or the event's parameters, any
@@ -191,12 +199,78 @@ defmodule RiddlerLiveView.Journey do
   A refused submit or back request calls no host callback and changes
   nothing drawn.
 
+  ## A re-present
+
+  An element whose `"condition"` reads a response given on the same screen
+  is shown or hidden by what the visitor types there, but riddler resolves
+  the screen only when it is presented. A host that wants the screen drawn
+  again as the visitor types passes `re_present`, a function of the
+  Journey's name and the draft:
+
+      <.live_component
+        module={RiddlerLiveView.Journey}
+        id="registration"
+        journey={@journey}
+        host={Library.RegistrationHost}
+        access={Library.PatronAccess}
+        actor={@patron_id}
+        re_present={&Library.RegistrationHost.re_present/2}
+      />
+
+  With it, the form carries `phx-change="change"`, and each change event the
+  browser sends is handled so:
+
+    * the event must name the screen drawn, as a submit must; one from
+      another screen, or one while no screen is drawn, is refused and calls
+      nothing;
+    * the access check is asked with `:present`, the operation of showing,
+      before the host's function is called; a refused check draws the one
+      refusal, as on mount;
+    * the host's function is called with the Journey's name and the draft,
+      a map of `"screen"`, the key of the screen drawn, and `"responses"`,
+      built from the form exactly as a submit's are, the visitor's offset
+      added to a datetime included, with every secret question left out;
+    * an answer `{:ok, answer}` whose answer is a screen of the shape
+      `present/1`'s is, with the key of the screen drawn, is drawn in place
+      of it, with the draft's values drawn in its questions so that no value
+      the visitor typed is lost; the findings of an earlier refusal are not
+      drawn again, since a draft is not validated;
+    * an answer `{:error, :no_such_journey}` draws the refusal; any other
+      answer, a screen of another key, a waiting or a done answer included,
+      keeps what is drawn and logs one line, as an answer of `submit/2`
+      outside its contract does.
+
+  A re-present steps nothing: the host's `submit/2` and `back/2` are not
+  called, and the Journey is where it was. A button the re-presented screen
+  shows, and whose outcome its moves list, is then pressed and submitted as
+  any other. No `phx-debounce` is drawn: each change event the browser sends
+  asks the host once. A `re_present` that is not a function of two
+  arguments raises `ArgumentError` when the component mounts, as the host's
+  wiring.
+
+  The host's function answers as its `present/1` would, for where the
+  Journey is with the draft's responses beside the ones already given,
+  without keeping them:
+
+      def re_present(journey, %{"responses" => draft}) do
+        with {:ok, execution} <- Library.Executions.fetch(journey),
+             root = Library.Executions.with_responses(execution, draft),
+             {:ok, answer} <-
+               Riddler.Journey.present(execution.document, execution.status, root) do
+          {:ok, answer}
+        else
+          _missing -> {:error, :no_such_journey}
+        end
+      end
+
   ## What the component holds
 
   The Journey's name, the host's modules and options, the answer drawn, the
   Journey's scope, the findings of the last refusal, a count of refusals and
   the reference of the pending retry timer, if a waiting answer set one:
-  nothing a visitor typed. What a submit carries is handed to the
+  nothing a visitor typed, except that a re-presented answer carries the
+  draft's values in its questions, a secret question's never, until the
+  next answer replaces it. What a submit carries is handed to the
   host and not kept, so a secret question's value is in no assign after the
   submit and in no markup. The component logs nothing but the line a
   callback outside its contract earns, and the secret
@@ -231,7 +305,8 @@ defmodule RiddlerLiveView.Journey do
     :done_text,
     :refused_text,
     :id_prefix,
-    :class
+    :class,
+    :re_present
   ]
 
   @defaults %{
@@ -245,7 +320,8 @@ defmodule RiddlerLiveView.Journey do
     done_text: "All done.",
     refused_text: "There is nothing to show here.",
     id_prefix: nil,
-    class: nil
+    class: nil,
+    re_present: nil
   }
 
   @question_types ~w(text_question secret_question choice_question boolean_question)
@@ -318,6 +394,23 @@ defmodule RiddlerLiveView.Journey do
     end
   end
 
+  def handle_event("change", params, socket) do
+    with re_present when is_function(re_present, 2) <- socket.assigns.re_present,
+         {:ok, screen, _moves} <- presented_screen(socket),
+         :ok <- same_screen(params["riddler-screen"], screen),
+         {:access, :ok} <- {:access, authorize(socket, :present)} do
+      %{journey: journey} = socket.assigns
+      draft = %{"screen" => screen["key"], "responses" => draft(screen, socket.assigns, params)}
+
+      "the host's re_present"
+      |> guarded(fn -> re_present.(journey, draft) end)
+      |> redraw(screen, draft, socket)
+    else
+      {:access, :refused} -> {:noreply, refuse(socket)}
+      _refused -> {:noreply, socket}
+    end
+  end
+
   def handle_event("back", params, socket) do
     with {:ok, screen, moves} <- presented_screen(socket),
          {:ok, %{"back" => true} = request} <- Journey.decode_submit(params),
@@ -341,7 +434,8 @@ defmodule RiddlerLiveView.Journey do
     assigns =
       assign(assigns,
         state: assigns.answer && assigns.answer["state"],
-        prefix: assigns.id_prefix || assigns.id
+        prefix: assigns.id_prefix || assigns.id,
+        change: if(assigns[:re_present], do: "change")
       )
 
     ~H"""
@@ -354,6 +448,7 @@ defmodule RiddlerLiveView.Journey do
       <form
         :if={@state == "screen"}
         phx-submit="submit"
+        phx-change={@change}
         phx-target={@myself}
         phx-value-riddler-screen={@answer["screen"]["key"]}
         class="riddler-form"
@@ -400,6 +495,12 @@ defmodule RiddlerLiveView.Journey do
   defp check_wiring!(assigns) do
     for key <- [:journey, :host], is_nil(assigns[key]) do
       raise ArgumentError, "RiddlerLiveView.Journey needs the #{inspect(key)} assign"
+    end
+
+    if not (is_nil(assigns[:re_present]) or is_function(assigns[:re_present], 2)) do
+      raise ArgumentError,
+            "RiddlerLiveView.Journey needs the :re_present assign to be nil " <>
+              "or a function of two arguments"
     end
 
     if not access_module?(assigns[:access]) do
@@ -474,6 +575,62 @@ defmodule RiddlerLiveView.Journey do
   end
 
   defp step(answer, callback, socket), do: keep(answer, callback, socket)
+
+  # What a re-present draws: a screen answer with the key of the screen
+  # drawn, with the draft's values in its questions. A re-present steps
+  # nothing, so any other state, or a screen of another key, is outside the
+  # hook's contract and keeps what is drawn.
+  defp redraw(
+         {:ok, %{"state" => "screen", "screen" => %{"key" => key}} = answer},
+         %{"key" => key},
+         draft,
+         socket
+       ) do
+    answer = with_draft(answer, draft["responses"])
+
+    case drawable("the host's re_present", socket, shown(answer)) do
+      :ok -> {:noreply, show(socket, answer)}
+      :outside -> {:noreply, socket}
+    end
+  end
+
+  defp redraw({:error, :no_such_journey}, _screen, _draft, socket),
+    do: {:noreply, refuse(socket)}
+
+  defp redraw(answer, _screen, _draft, socket),
+    do: keep(answer, "the host's re_present", socket)
+
+  # The visitor's typed values, drawn in the re-presented screen's
+  # questions, so that drawing the form again loses none of them. An answer
+  # whose elements are not a list is left as it is, for the shape check.
+  defp with_draft(%{"screen" => %{"elements" => elements}} = answer, responses)
+       when is_list(elements) do
+    elements =
+      Enum.map(elements, fn
+        %{"type" => "secret_question"} = element ->
+          element
+
+        %{"key" => key} = element when is_map_key(responses, key) ->
+          Map.put(element, "value", Map.fetch!(responses, key))
+
+        element ->
+          element
+      end)
+
+    put_in(answer, ["screen", "elements"], elements)
+  end
+
+  defp with_draft(answer, _responses), do: answer
+
+  # The responses a submit of the screen drawn would carry, with every
+  # secret question left out: a draft never carries a secret to the host.
+  defp draft(screen, assigns, params) do
+    secrets =
+      for %{"type" => "secret_question", "key" => key} <- List.wrap(screen["elements"]),
+          do: key
+
+    screen |> responses(assigns, params) |> Map.drop(secrets)
+  end
 
   # An answer outside the host's contract keeps what is drawn. One the
   # shape check or the render probe refused is logged there, and kept the
